@@ -1,0 +1,15 @@
+# --- existing scaffold ---
+nfl_data_py>=0.3.2        # nflverse: schedules, play-by-play, weekly player stats
+requests>=2.31            # The Odds API client in fetch_odds_data.py
+python-dotenv>=1.0        # .env loading for API keys
+
+# --- added for the modelling pipeline ---
+pandas>=2.0               # dataframes throughout
+numpy>=1.24               # numerics
+scipy>=1.10               # Dixon-Coles MLE (optimize), Poisson/Normal distributions
+scikit-learn>=1.3         # logistic regression, ridge, gradient boosting, calibration
+pyarrow>=14.0             # parquet IO for the clean/feature layers
+joblib>=1.3               # model persistence
+
+# --- dev ---
+pytest>=7.4               # test suite (leakage guards, model sanity)

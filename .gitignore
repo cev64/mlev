@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Data + model artifacts are reproducible from the pipelines; keep the tree shape only.
+data/**/*.csv
+data/**/*.parquet
+data/**/*.joblib
+data/**/*.json
+!data/**/.gitkeep
