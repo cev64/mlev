@@ -20,6 +20,13 @@ from sports.nfl import models as nfl_models
 log = logging.getLogger(__name__)
 
 GAME_OUTCOMES = ["home_win", "home_margin", "total_points"]
+
+# Down-weight older training seasons by 0.5 ** (seasons_ago / 4). Four seasons
+# is roughly how long an NFL roster, coaching staff and scheme stay recognisable,
+# and the league drifts underneath a model that ignores it: passing yards per
+# quarterback game fell from ~245 in 2016 to ~201 in 2025. See the README's
+# "league drift" note for the sensitivity check behind this default.
+RECENCY_HALFLIFE_SEASONS = 4.0
 PLAYER_OUTCOMES = [
     "passing_yards", "passing_tds", "rushing_yards", "receiving_yards",
     "receptions", "scrimmage_yards", "scrimmage_tds", "anytime_td",
@@ -79,6 +86,7 @@ class NFLPipeline(SportPipeline):
         return TabularBundle(
             specs=nfl_models.game_targets(),
             feature_cols=nfl_features.game_feature_columns(features),
+            recency_halflife_seasons=RECENCY_HALFLIFE_SEASONS,
         )
 
     def player_model(self) -> MarketModel:
@@ -86,6 +94,7 @@ class NFLPipeline(SportPipeline):
         return TabularBundle(
             specs=nfl_models.player_targets(),
             feature_cols=nfl_features.player_feature_columns(features),
+            recency_halflife_seasons=RECENCY_HALFLIFE_SEASONS,
         )
 
     # --- outputs ------------------------------------------------------------

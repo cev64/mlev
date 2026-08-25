@@ -85,6 +85,18 @@ def _inner_cv(n_rows: int) -> TimeSeriesSplit | int:
     return 3
 
 
+def _weight_kwargs(pipeline: Pipeline, sample_weight: np.ndarray | None) -> dict:
+    """Route sample weights to the final step of a fitted sklearn Pipeline.
+
+    Pipelines take per-step fit params as `<step>__<param>`, so the caller does
+    not need to know whether the estimator is called "clf" or "reg".
+    """
+    if sample_weight is None:
+        return {}
+    final_step = pipeline.steps[-1][0]
+    return {f"{final_step}__sample_weight": np.asarray(sample_weight, dtype=float)}
+
+
 class BaseModel(ABC):
     """Common fit/predict contract for every model in the project."""
 
@@ -104,7 +116,10 @@ class BaseModel(ABC):
             raise ModelNotFittedError(f"{self.name}: call fit() before predict_dist()")
 
     @abstractmethod
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "BaseModel": ...
+    def fit(
+        self, X: pd.DataFrame, y: pd.Series, sample_weight: np.ndarray | None = None
+    ) -> "BaseModel":
+        """Fit the model. `sample_weight` lets callers down-weight old seasons."""
 
     @abstractmethod
     def predict_dist(self, X: pd.DataFrame) -> list[PredictiveDistribution]: ...
@@ -175,13 +190,15 @@ class BinaryProbabilityModel(BaseModel):
             return Pipeline([*_prep(scale=False), ("clf", clf)])
         raise ValueError(f"unknown estimator {self.estimator!r}")
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "BinaryProbabilityModel":
+    def fit(
+        self, X: pd.DataFrame, y: pd.Series, sample_weight: np.ndarray | None = None
+    ) -> "BinaryProbabilityModel":
         y = pd.Series(y).astype(float)
         if y.nunique() < 2:
             raise ValueError(f"{self.name}: training target has a single class")
         self.base_rate_ = float(y.mean())
         self.pipeline = self._build(len(y))
-        self.pipeline.fit(self._matrix(X), y.to_numpy())
+        self.pipeline.fit(self._matrix(X), y.to_numpy(), **_weight_kwargs(self.pipeline, sample_weight))
         self._fitted = True
         return self
 
@@ -247,23 +264,34 @@ class GaussianRegressionModel(BaseModel):
             return Pipeline([*_prep(scale=False), ("reg", gbm)])
         raise ValueError(f"unknown estimator {self.estimator!r}")
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "GaussianRegressionModel":
+    def fit(
+        self, X: pd.DataFrame, y: pd.Series, sample_weight: np.ndarray | None = None
+    ) -> "GaussianRegressionModel":
         y = pd.Series(y).astype(float)
         mat = self._matrix(X)
         self.pipeline = self._build_mean(len(y))
-        self.pipeline.fit(mat, y.to_numpy())
+        self.pipeline.fit(mat, y.to_numpy(), **_weight_kwargs(self.pipeline, sample_weight))
 
         residuals = y.to_numpy() - self.pipeline.predict(mat)
         # In-sample residuals understate true error; the walk-forward backtest
         # is what tells you whether this sigma is honest (see pit_coverage).
-        self.sigma_ = max(float(np.std(residuals, ddof=1)), self.min_sigma)
+        # Weighted, so the spread reflects recent seasons when weights are given.
+        if sample_weight is None:
+            self.sigma_ = max(float(np.std(residuals, ddof=1)), self.min_sigma)
+        else:
+            w = np.asarray(sample_weight, dtype=float)
+            mean = float(np.average(residuals, weights=w))
+            var = float(np.average((residuals - mean) ** 2, weights=w))
+            self.sigma_ = max(float(np.sqrt(var)), self.min_sigma)
 
         if self.heteroskedastic:
             log_abs = np.log(np.maximum(np.abs(residuals), self.min_sigma))
             self.spread_pipeline = Pipeline(
                 [*_prep(scale=True), ("reg", RidgeCV(alphas=np.logspace(-2, 4, 13)))]
             )
-            self.spread_pipeline.fit(mat, log_abs)
+            self.spread_pipeline.fit(
+                mat, log_abs, **_weight_kwargs(self.spread_pipeline, sample_weight)
+            )
         self._fitted = True
         return self
 
@@ -306,7 +334,9 @@ class PoissonCountModel(BaseModel):
         self.max_lambda = max_lambda
         self.pipeline: Pipeline | None = None
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "PoissonCountModel":
+    def fit(
+        self, X: pd.DataFrame, y: pd.Series, sample_weight: np.ndarray | None = None
+    ) -> "PoissonCountModel":
         y = pd.Series(y).astype(float)
         if (y < 0).any():
             raise ValueError(f"{self.name}: Poisson target has negative values")
@@ -316,7 +346,9 @@ class PoissonCountModel(BaseModel):
                 ("reg", PoissonRegressor(alpha=self.alpha, max_iter=1000)),
             ]
         )
-        self.pipeline.fit(self._matrix(X), y.to_numpy())
+        self.pipeline.fit(
+            self._matrix(X), y.to_numpy(), **_weight_kwargs(self.pipeline, sample_weight)
+        )
         self._fitted = True
         return self
 
@@ -348,14 +380,21 @@ class NegativeBinomialCountModel(PoissonCountModel):
         self.min_dispersion = min_dispersion
         self.dispersion_: float = float("nan")
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "NegativeBinomialCountModel":
-        super().fit(X, y)
+    def fit(
+        self, X: pd.DataFrame, y: pd.Series, sample_weight: np.ndarray | None = None
+    ) -> "NegativeBinomialCountModel":
+        super().fit(X, y, sample_weight)
         assert self.pipeline is not None
         y_arr = pd.Series(y).astype(float).to_numpy()
         mu = np.clip(self.pipeline.predict(self._matrix(X)), 1e-6, self.max_lambda)
         # Var = mu + a*mu^2  =>  a = mean[ ((y-mu)^2 - mu) / mu^2 ]
         moment = ((y_arr - mu) ** 2 - mu) / np.maximum(mu**2, 1e-9)
-        self.dispersion_ = max(float(np.mean(moment)), self.min_dispersion)
+        estimate = (
+            np.mean(moment)
+            if sample_weight is None
+            else np.average(moment, weights=np.asarray(sample_weight, dtype=float))
+        )
+        self.dispersion_ = max(float(estimate), self.min_dispersion)
         return self
 
     def predict_dist(self, X: pd.DataFrame) -> list[NegativeBinomialDistribution]:

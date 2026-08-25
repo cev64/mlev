@@ -23,6 +23,10 @@ log = logging.getLogger(__name__)
 GAME_OUTCOMES = ["home_goals", "away_goals", "total_goals", "goal_difference"]
 PLAYER_OUTCOMES = ["goals", "assists", "shots", "xg", "carded", "scored"]
 
+# The Dixon-Coles game model carries its own per-match exponential decay, so
+# only the player bundle needs season weighting here.
+RECENCY_HALFLIFE_SEASONS = 4.0
+
 
 class EPLPipeline(SportPipeline):
     """football-data + Understat -> Dixon-Coles game lines and player props."""
@@ -98,6 +102,7 @@ class EPLPipeline(SportPipeline):
         return TabularBundle(
             specs=epl_models.player_targets(),
             feature_cols=epl_features.player_feature_columns(features),
+            recency_halflife_seasons=RECENCY_HALFLIFE_SEASONS,
         )
 
     # --- outputs ------------------------------------------------------------

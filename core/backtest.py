@@ -72,12 +72,27 @@ class TargetSpec:
 
 @dataclass
 class TabularBundle(MarketModel):
-    """A set of independent per-row targets sharing one feature matrix."""
+    """A set of independent per-row targets sharing one feature matrix.
+
+    `recency_halflife_seasons` down-weights older training rows by
+    `0.5 ** (seasons_ago / halflife)`. Sports drift: NFL passing yards per
+    quarterback game fell from about 245 in 2016 to about 201 in 2025, so a
+    model that treats a 2016 row as equal evidence to a 2025 row will
+    systematically over-predict. Set it to None to weight every season equally.
+    """
 
     specs: Sequence[TargetSpec]
     feature_cols: list[str]
+    recency_halflife_seasons: float | None = None
+    season_col: str = "season"
     fitted: dict[str, BaseModel] = field(default_factory=dict)
     skipped: dict[str, str] = field(default_factory=dict)
+
+    def _weights(self, rows: pd.DataFrame) -> np.ndarray | None:
+        if self.recency_halflife_seasons is None or self.season_col not in rows.columns:
+            return None
+        seasons_ago = rows[self.season_col].max() - rows[self.season_col]
+        return np.power(0.5, seasons_ago / self.recency_halflife_seasons).to_numpy(dtype=float)
 
     def _rows(self, df: pd.DataFrame, spec: TargetSpec) -> pd.DataFrame:
         sub = df if spec.row_filter is None else df.loc[spec.row_filter(df)]
@@ -95,7 +110,7 @@ class TabularBundle(MarketModel):
                 continue
             try:
                 model = spec.factory(self.feature_cols)
-                model.fit(rows, rows[spec.outcome_col])
+                model.fit(rows, rows[spec.outcome_col], self._weights(rows))
             except ValueError as exc:  # single-class target, all-NaN column, ...
                 self.skipped[spec.name] = str(exc)
                 continue

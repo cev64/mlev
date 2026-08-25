@@ -107,6 +107,23 @@ def test_derived_markets_are_mutually_consistent():
     assert half["home"] == pytest.approx(outcome.prob("home"))
 
 
+def test_whole_goal_handicap_differs_only_by_the_push():
+    """-1.0 and -1.5 share a cover probability; the push is what separates them.
+
+    Emitting the cover column alone would make the two lines look identical, so
+    this pins the relationship the prediction output relies on.
+    """
+    s = ScorelineDistribution(poisson_grid(1.9, 1.0))
+    whole, half = s.asian_handicap(-1.0), s.asian_handicap(-1.5)
+    assert whole["home"] == pytest.approx(half["home"])
+    assert half["push"] == pytest.approx(0.0)
+    assert whole["push"] > 0.0
+    # Each line's three outcomes must still be a probability distribution.
+    for line in (-1.5, -1.0, -0.5, 0.0, 0.5, 1.0):
+        ah = s.asian_handicap(line)
+        assert sum(ah.values()) == pytest.approx(1.0)
+
+
 def test_quarter_handicap_splits_the_stake():
     s = ScorelineDistribution(poisson_grid(1.8, 1.0))
     low, high = s.asian_handicap(-0.5), s.asian_handicap(-1.0)

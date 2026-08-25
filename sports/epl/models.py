@@ -158,6 +158,12 @@ class DixonColesMarketModel(MarketModel):
                 ah = scoreline.asian_handicap(line)
                 key = f"{line:+g}".replace(".", "_").replace("-", "m").replace("+", "p")
                 row[f"p_ah_home_{key}"] = ah["home"]
+                # On a whole-goal handicap the cover probability is identical to
+                # the next half-line's -- what separates them is the stake
+                # refunded on an exact-margin push. Emitting only the cover
+                # column would make -1.0 and -1.5 look like duplicates and lose
+                # the one number that distinguishes them.
+                row[f"p_ah_push_{key}"] = ah["push"]
             records.append(row)
 
         return pd.DataFrame(records, index=test.index)
