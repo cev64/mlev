@@ -3,6 +3,7 @@ package com.mlev.app
 import android.app.Application
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -66,5 +67,58 @@ class StartupTest {
         val application = ApplicationProvider.getApplicationContext<Application>()
         val viewModel = MlevViewModel(application, SavedStateHandle())
         assertNotNull(viewModel.state.value)
+    }
+}
+
+/**
+ * Pins the exact bug that shipped in 2.0.0, so it cannot come back quietly.
+ *
+ * Kept separate from [StartupTest] because it asserts the *old* behaviour still
+ * fails: it reconstructs what MainActivity used to do and shows it throws. If a
+ * future change makes AndroidViewModelFactory able to build this ViewModel, this
+ * test will start failing and can be deleted — but until then it is the evidence
+ * that the diagnosis was right, rather than a plausible story.
+ */
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34])
+class ViewModelFactoryRegressionTest {
+
+    @Test
+    fun `the factory 2_0_0 used cannot build this view model`() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val brokenFactory = ViewModelProvider.AndroidViewModelFactory
+                    .getInstance(activity.application)
+
+                // A fresh store, not the activity's. Asking the activity for it
+                // would return the instance MainActivity already built with the
+                // working factory, and the broken one would never be called.
+                val store = ViewModelStore()
+                val failure = runCatching {
+                    ViewModelProvider(
+                        store, brokenFactory, activity.defaultViewModelCreationExtras,
+                    )[MlevViewModel::class.java]
+                }.exceptionOrNull()
+
+                assertNotNull(
+                    "AndroidViewModelFactory should not be able to construct a " +
+                        "ViewModel taking (Application, SavedStateHandle). If this " +
+                        "is null the 2.0.0 crash had a different cause than recorded.",
+                    failure,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `the factory the app now uses does build it`() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val viewModel = ViewModelProvider(activity, MlevViewModel.Factory)[
+                    MlevViewModel::class.java
+                ]
+                assertNotNull(viewModel.state.value)
+            }
+        }
     }
 }
