@@ -163,13 +163,42 @@ https://<your-github-username>.github.io/mlev
 
 Tap **Save and refresh**. From then on it updates itself in the background.
 
-### Publishing predictions
+### Publishing predictions — one-time setup
 
-`.github/workflows/predictions.yml` runs the pipeline on a schedule — NFL on
-Tuesdays and Fridays, EPL daily — and publishes the bundles to GitHub Pages.
+`.github/workflows/predictions.yml` runs the pipeline and publishes the bundles
+to GitHub Pages. Both steps below are done in a browser; no computer needed.
 
-Enable it once: repository **Settings → Pages → Source → GitHub Actions**. Then
-either wait for the schedule or run it manually from the Actions tab.
+**1. Point Pages at Actions.** On github.com → your repo → **Settings** →
+**Pages** → under *Build and deployment*, set **Source** to **GitHub Actions**.
+
+This matters. The default is "Deploy from a branch", which serves the repo's
+files as a website and ignores the workflow entirely. `actions/deploy-pages`
+needs the Actions source, and fails with a "Get Pages site failed" error
+otherwise.
+
+**2. Run it.** → **Actions** tab → **Publish predictions** in the left list →
+**Run workflow** → **Run workflow**.
+
+The first run takes 15–30 minutes: it downloads about ten seasons of data,
+backtests both sports, and exports the bundles. After that it runs itself —
+daily, plus an extra run on Tuesdays and Fridays for the NFL.
+
+**3. Check it worked.** Open this in any browser:
+
+```
+https://cev64.github.io/mlev/nfl.json
+```
+
+You should see JSON starting with `{"schema":1,"sport":"nfl"...`. If you get a
+404, Pages has not finished deploying — give it a minute.
+
+The app already points at `https://cev64.github.io/mlev` by default, so there is
+nothing to change in Settings unless you host it somewhere else.
+
+**If the Premier League bundle is missing**, that is usually not an error.
+football-data's fixture feed only lists matches a few days out, so between
+matchweeks there is genuinely nothing to predict and the export skips that sport
+rather than failing. NFL still publishes.
 
 You can also publish from your Mac instead:
 
