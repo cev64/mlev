@@ -32,6 +32,15 @@ log = logging.getLogger(__name__)
 PRIMETIME_HOUR = 19
 PRIMETIME_WEEKDAYS = {"Thursday", "Monday", "Saturday"}
 
+# What the book had posted before kickoff. `spread_line` is positive when the
+# home team is favoured, so the home side covers when home_margin > spread_line.
+MARKET_COLUMNS = [
+    "spread_line", "total_line",
+    "home_moneyline", "away_moneyline",
+    "home_spread_odds", "away_spread_odds",
+    "over_odds", "under_odds",
+]
+
 
 def _require(config: SportConfig, name: str) -> pd.DataFrame:
     return read_table(
@@ -73,12 +82,22 @@ def clean_games(config: SportConfig) -> pd.DataFrame:
     # target rather than assigning it arbitrarily to one side.
     sched.loc[sched["home_margin"] == 0, "home_win"] = np.nan
 
+    # The market's own numbers. These are neither features nor outcomes: they
+    # are what a well-informed observer thought before kickoff, which makes
+    # them legitimate to know at predict time and the right benchmark to be
+    # scored against. They are kept out of the model matrix in
+    # `game_feature_columns` and used only through `core.market`.
+    for column in MARKET_COLUMNS:
+        if column in sched.columns:
+            sched[column] = pd.to_numeric(sched[column], errors="coerce")
+
     keep = [
         "game_id", "season", "game_type", "week", "kickoff", "weekday",
         "home_team", "away_team", "home_score", "away_score",
         "home_rest", "away_rest", "is_primetime", "is_divisional", "is_playoff",
         "is_dome", "is_turf", "neutral_site", "temp", "wind",
         "home_margin", "total_points", "home_win",
+        *MARKET_COLUMNS,
     ]
     games = sched[[c for c in keep if c in sched.columns]].copy()
     return games.sort_values(["kickoff", "game_id"]).reset_index(drop=True)

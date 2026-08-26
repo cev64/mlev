@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased — the market as a benchmark
+
+### Added
+- **The posted line is now part of the model.** `core/market.py` de-vigs a price
+  pair into the market's own probability, blends a model estimate with the line,
+  and settles bets so the backtest can report what following the model would
+  have returned. The blend weight is fitted inside each training fold, on its
+  two most recent seasons, scored by a model that never saw them.
+- **ROI is a first-class backtest output**, reported beside Brier along with the
+  model's error against the closing line. A model that beats the base rate and
+  loses to the line is the normal case, and the reporting can now say so.
+- The bundle carries the blend weight, the posted line per fixture, and the
+  market metrics, so the app shows the model beside the line rather than in a
+  vacuum, and the About screen shows the losing rows as well as the winning ones.
+
+### Changed
+- **NFL game-line predictions are blended toward the line.** Out of sample over
+  2019–2025: home-win Brier 0.2225 → **0.2111**, accuracy 64.2% → **66.7%**,
+  ECE 0.034 → **0.024**, margin MAE 10.16 → **9.82**, total MAE 10.65 →
+  **10.37**. The blended model is level with the closing line, which the raw
+  model was not.
+- **The expected-value output is no longer inflated.** Backing the model's own
+  +EV moneylines returned −9.45% before the blend, worse than picking sides at
+  random, because selecting on expected value selects the games where the
+  model's error inflates it. It now returns −2.7% with a 95% interval of −11.0%
+  to +5.7%: still no edge, but no longer an actively harmful filter, and the
+  mean claimed edge on a pick fell from 22.8% to 4.7%.
+
+### Fixed
+- The blend probe's sample weights were sliced positionally out of the caller's
+  array, which assumes training rows are ordered by season and would otherwise
+  attach each game's recency weight to some other game.
+- `test_bundle` pinned a hardcoded 0.67 moneyline for one fixture, so any change
+  to the model failed a test about the client. It now asserts the property it
+  was named for.
+
 ## Unreleased — fix: the text boxes
 
 ### Fixed

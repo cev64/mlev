@@ -75,7 +75,14 @@ def _backtest_summary(config: SportConfig) -> dict:
     out = {}
     for _, row in frame.iterrows():
         entry = {}
-        for key in ("n", "brier", "baseline_brier", "log_loss", "accuracy", "ece", "mae"):
+        # The market rows travel with the rest deliberately. "Beats the base
+        # rate" reads far better on its own than the position it describes, and
+        # an app that shows only the flattering half of its own evidence is
+        # doing the arguing for the user instead of informing them.
+        for key in (
+            "n", "brier", "baseline_brier", "log_loss", "accuracy", "ece", "mae",
+            "model_mae", "market_mae", "roi", "roi_low", "roi_high", "hit_rate",
+        ):
             if key in row and pd.notna(row[key]):
                 entry[key] = _round(row[key], 5)
         if entry:
@@ -116,6 +123,12 @@ def build_nfl_bundle(pipeline, scored: pd.DataFrame) -> dict:
                     "mean": _round(row["total_points_mean"], 4),
                     "sd": _round(row["total_points_sd"], 4),
                 },
+                # What the book had posted when this was exported. Carried so
+                # the app can show the model beside the line rather than in a
+                # vacuum — the distributions above are already blended toward
+                # it, and seeing both is what tells you how much of the number
+                # is the model's own opinion.
+                "market": _market_block(row),
             }
         )
 
@@ -125,8 +138,38 @@ def build_nfl_bundle(pipeline, scored: pd.DataFrame) -> dict:
             "margin": lattice(model.margin_shape_) if model.margin_shape_ else None,
             "total": lattice(model.total_shape_) if model.total_shape_ else None,
         },
+        # How far toward the model the blend moved, fitted on training data
+        # only. 0.15 means the exported numbers are 15% model, 85% posted line.
+        "blend": _blend_block(scored),
         "fixtures": fixtures,
     }
+
+
+def _blend_block(scored: pd.DataFrame) -> dict:
+    """The weights that produced these predictions, read off the rows.
+
+    Taken from the scored frame rather than from a second fit of the same
+    model: two fits on the same data should agree, but "should" is how a bundle
+    ends up describing itself inaccurately.
+    """
+    def one(column: str) -> float | None:
+        if column not in scored.columns or scored[column].isna().all():
+            return None
+        return _round(scored[column].iloc[0], 3)
+
+    return {"margin": one("margin_blend_weight"), "total": one("total_blend_weight")}
+
+
+def _market_block(row) -> dict | None:
+    """The posted line for one fixture, where the feed has published one."""
+    block = {
+        "spread": _round(row.get("spread_line"), 2),
+        "total": _round(row.get("total_line"), 2),
+        "home_price": _round(row.get("home_moneyline"), 0),
+        "away_price": _round(row.get("away_moneyline"), 0),
+    }
+    live = {k: v for k, v in block.items() if v is not None}
+    return live or None
 
 
 def build_epl_bundle(pipeline, scored: pd.DataFrame) -> dict:

@@ -220,28 +220,69 @@ here by design — no market data is wired in.
 
 ### NFL game lines — test seasons 2019–2025, n = 1,954 games
 
+Predictions are blended with the posted line at a weight fitted inside each
+training fold (see *Against the market* below). Figures are for the blended
+model, which is what the app ships.
+
 | Target | Metric | Model | Baseline |
 |---|---|---|---|
-| Home win | Brier | **0.2225** | 0.2486 (base rate) |
-| Home win | Log loss | **0.6360** | — |
-| Home win | Accuracy | **64.2%** | 55.0% (always home) |
-| Home win | Calibration error (ECE) | **0.032** | — |
-| Home margin | MAE / RMSE | **10.16** / 13.12 | — |
-| Home margin | Bias | +0.03 | — |
-| Total points | MAE / RMSE | **10.65** / 13.39 | — |
+| Home win | Brier | **0.2111** | 0.2486 (base rate) |
+| Home win | Log loss | **0.6096** | — |
+| Home win | Accuracy | **66.7%** | 55.0% (always home) |
+| Home win | Calibration error (ECE) | **0.024** | — |
+| Home margin | MAE / RMSE | **9.82** / 12.72 | — |
+| Home margin | Bias | −0.04 | — |
+| Total points | MAE / RMSE | **10.37** / 13.11 | — |
+
+Every one of the seven test seasons beats the base-rate Brier, with accuracy
+between 62.3% and 71.6%.
+
+### Against the market — the bar that actually matters
+
+Beating the base rate says a model knows something about football. Beating the
+closing line says it knows something the price does not, and only the return
+says whether that difference survives the book's margin. All three are reported
+because the first reads far better on its own than the position it describes.
+
+| | Model | Closing line |
+|---|---|---|
+| Home margin MAE | **9.821** | 9.822 |
+| Total points MAE | **10.373** | 10.376 |
+| Straight-up winner | **66.7%** | 66.2% |
+
+The blended model is level with the closing line — a genuine result for a model
+this size, and not the same thing as an edge:
+
+| Selection | Bets | Flat-stake ROI | 95% interval |
+|---|---|---|---|
+| Every +EV moneyline | 1,098 | **−2.7%** | −11.0% to +5.7% |
+| Only edges over 10% | 136 | −7.8% | −37.7% to +22.0% |
+| Every side (the house edge) | 3,908 | −4.3% | −7.9% to −0.7% |
+
+**There is no betting edge here.** Following the model's own +EV picks loses
+money out of sample; it loses less than backing everything, and the interval
+covers zero, which is what "no demonstrated edge" looks like when it is measured
+rather than assumed.
+
+For context on what the blend fixed: before it, the model's margin MAE was 10.16
+against the line's 9.82, and its +EV picks returned **−9.45%** — worse than
+picking sides at random (−3.1%), because selecting on expected value selects
+precisely the games where the model's error runs in the direction that inflates
+it. The mean claimed edge on a +EV pick fell from 22.8% to 4.7% once the blend
+was in.
 
 Derived spread markets, from the same margin distribution:
 
 | Line | n | Brier | Base rate | Accuracy |
 |---|---|---|---|---|
-| Home −3 | 1,818 | **0.2154** | 0.2470 | 65.9% |
-| Home −7 | 1,880 | **0.1895** | 0.2135 | 71.8% |
-| Pick'em | 1,954 | **0.2223** | 0.2486 | 63.8% |
-| Home +3 | 1,817 | **0.2119** | 0.2332 | 66.7% |
+| Home −3 | 1,818 | **0.2042** | 0.2470 | 68.2% |
+| Home −7 | 1,880 | **0.1827** | 0.2135 | 73.0% |
+| Pick'em | 1,954 | **0.2110** | 0.2486 | 66.6% |
+| Home +3 | 1,817 | **0.2007** | 0.2332 | 68.7% |
 
-Every test season beats the base-rate Brier. Margin MAE around 10.2 points is in
-the range a sharp market achieves, which is the sanity check that matters: a
-model reporting MAE of 6 would be a leak, not a breakthrough.
+Margin MAE around 9.8 points is in the range a sharp market achieves, which is
+the sanity check that matters: a model reporting MAE of 6 would be a leak, not a
+breakthrough.
 
 ### NFL player props — test seasons 2022–2025
 

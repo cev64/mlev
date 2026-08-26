@@ -17,18 +17,26 @@ is the point of routing everything through `core.models`.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
+from core import market as MKT
 from core import metrics as M
 from core.backtest import MarketModel, TargetSpec, _normal_coverage
-from core.distributions import LatticeDistribution, LatticeShape
+from core.distributions import LatticeDistribution, LatticeShape, NormalDistribution
 from core.models import (
     BinaryProbabilityModel,
     GaussianRegressionModel,
     NegativeBinomialCountModel,
     PoissonCountModel,
 )
+
+log = logging.getLogger(__name__)
+
+# Seasons held out inside the training fold to fit the market blend weight.
+BLEND_HOLDOUT_SEASONS = 2
 
 RECEIVING_GROUPS = ("WR", "TE", "RB")
 
@@ -192,6 +200,10 @@ class JointGameModel(MarketModel):
     SPREAD_LINES = (-10.5, -7.0, -6.5, -3.5, -3.0, -2.5, 0.0, 2.5, 3.0, 3.5, 6.5, 7.0, 10.5)
     TOTAL_LINES = (37.5, 41.5, 44.5, 47.5, 51.5, 44.0, 47.0)
 
+    # Where the book's numbers live, once `clean` has carried them through.
+    MARKET_MARGIN_COL = "spread_line"
+    MARKET_TOTAL_COL = "total_line"
+
     def __init__(
         self,
         feature_cols: list[str],
@@ -199,15 +211,19 @@ class JointGameModel(MarketModel):
         recency_halflife_seasons: float | None = 4.0,
         season_col: str = "season",
         empirical: bool = True,
+        blend_with_market: bool = True,
     ) -> None:
         self.feature_cols = list(feature_cols)
         self.recency_halflife_seasons = recency_halflife_seasons
         self.season_col = season_col
         self.empirical = empirical
+        self.blend_with_market = blend_with_market
         self.margin_model: GaussianRegressionModel | None = None
         self.total_model: GaussianRegressionModel | None = None
         self.margin_shape_: LatticeShape | None = None
         self.total_shape_: LatticeShape | None = None
+        self.margin_blend_: float = 1.0
+        self.total_blend_: float = 1.0
 
     def _weights(self, rows: pd.DataFrame) -> np.ndarray | None:
         if self.recency_halflife_seasons is None or self.season_col not in rows.columns:
@@ -235,7 +251,70 @@ class JointGameModel(MarketModel):
             # this replaced.
             self.margin_shape_ = LatticeShape.from_outcomes(rows["home_margin"].to_numpy())
             self.total_shape_ = LatticeShape.from_outcomes(rows["total_points"].to_numpy())
+
+        if self.blend_with_market:
+            self._fit_blend_weights(rows)
         return self
+
+    def _fit_blend_weights(self, rows: pd.DataFrame) -> None:
+        """How far to move the model's number toward the posted line.
+
+        Fitted on a holdout *inside* the training fold — the most recent
+        training season, scored by a model that never saw it. Using in-sample
+        predictions here would flatter the model badly: its training-fold
+        residuals are far smaller than its real ones, so the weight would come
+        out near 1 and the blend would do nothing. The test season is never
+        touched, for the same reason the rest of the pipeline never touches it.
+        """
+        seasons = sorted(rows[self.season_col].dropna().unique())
+        if len(seasons) < 4:
+            self.margin_blend_ = self.total_blend_ = MKT.DEFAULT_BLEND_WEIGHT
+            return
+
+        # Two seasons rather than one. A single season is ~280 games, and the
+        # error curve across candidate weights is nearly flat near its minimum,
+        # so one season lets noise pick the weight — it swung between 0.0 and
+        # 0.4 across runs that differed by nothing that mattered.
+        holdout_seasons = seasons[-BLEND_HOLDOUT_SEASONS:]
+        inner = rows[~rows[self.season_col].isin(holdout_seasons)]
+        holdout = rows[rows[self.season_col].isin(holdout_seasons)]
+        if len(inner) < 200 or holdout.empty:
+            self.margin_blend_ = self.total_blend_ = MKT.DEFAULT_BLEND_WEIGHT
+            return
+
+        # Recomputed for the inner fold rather than sliced out of the caller's
+        # array: slicing assumes `rows` is ordered by season, and a positional
+        # slice that is quietly wrong would attach each game's weight to some
+        # other game. Recency is relative to the inner fold's own last season,
+        # which is what a model trained on only those rows should see.
+        inner_weights = self._weights(inner)
+
+        for target, market_col, attribute in (
+            ("home_margin", self.MARKET_MARGIN_COL, "margin_blend_"),
+            ("total_points", self.MARKET_TOTAL_COL, "total_blend_"),
+        ):
+            if market_col not in holdout.columns:
+                setattr(self, attribute, 1.0)  # no line to blend with
+                continue
+            probe = GaussianRegressionModel(
+                self.feature_cols, heteroskedastic=True, name=f"{target}_blend_probe"
+            ).fit(inner, inner[target], inner_weights)
+            predicted = probe.predict_mean(holdout)
+            setattr(
+                self,
+                attribute,
+                MKT.fit_blend_weight(predicted, holdout[market_col], holdout[target]),
+            )
+        log.info(
+            "blend weights on the model: margin %.2f, total %.2f",
+            self.margin_blend_, self.total_blend_,
+        )
+
+    def _market_column(self, frame: pd.DataFrame, column: str) -> np.ndarray:
+        """The posted line, or all-NaN where a fixture has none yet."""
+        if not self.blend_with_market or column not in frame.columns:
+            return np.full(len(frame), np.nan)
+        return pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
 
     def _distribution(self, shape: LatticeShape | None, row_dist):
         if not self.empirical or shape is None:
@@ -249,8 +328,24 @@ class JointGameModel(MarketModel):
         margin_base = self.margin_model.predict_dist(test)
         total_base = self.total_model.predict_dist(test)
 
+        # Move each mean toward the posted line by the fitted weight. The sd is
+        # left alone: a blended mean is more accurate than the model's own, so
+        # keeping the model's spread makes every probability slightly less
+        # confident than it could be. That is the safe direction to be wrong in
+        # for anything that feeds an expected-value calculation.
+        margin_lines = self._market_column(test, self.MARKET_MARGIN_COL)
+        total_lines = self._market_column(test, self.MARKET_TOTAL_COL)
+        margin_means = MKT.blend(
+            [d.mean for d in margin_base], margin_lines, self.margin_blend_
+        )
+        total_means = MKT.blend(
+            [d.mean for d in total_base], total_lines, self.total_blend_
+        )
+
         records = []
-        for m_base, t_base in zip(margin_base, total_base):
+        for index, (m_base, t_base) in enumerate(zip(margin_base, total_base)):
+            m_base = NormalDistribution(float(margin_means[index]), m_base.sd)
+            t_base = NormalDistribution(float(total_means[index]), t_base.sd)
             margin = self._distribution(self.margin_shape_, m_base)
             total = self._distribution(self.total_shape_, t_base)
 
@@ -273,6 +368,12 @@ class JointGameModel(MarketModel):
                 "total_points_p90": total.quantile(0.90),
                 "exp_home_score": (total.mean + margin.mean) / 2.0,
                 "exp_away_score": (total.mean - margin.mean) / 2.0,
+                # Carried with the row so anything reading these predictions —
+                # the bundle above all — reports the weight that actually
+                # produced them, rather than re-deriving it from a second fit
+                # that could differ.
+                "margin_blend_weight": self.margin_blend_,
+                "total_blend_weight": self.total_blend_,
             }
             for line in self.SPREAD_LINES:
                 key = _line_key(line)
@@ -302,6 +403,7 @@ class JointGameModel(MarketModel):
                     _normal_coverage(sub[pred], sub[sd_col], sub[outcome]), 4
                 )
             rows.append(report)
+        rows.extend(self.market_report(joined))
         # Score the derived spread and total markets too — they are the point of
         # the joint model, and a good mean with bad cover probabilities is a
         # model that still cannot price a spread.
@@ -316,6 +418,62 @@ class JointGameModel(MarketModel):
                 continue
             actual = (live["home_margin"] > -line).astype(float)
             rows.append(M.classification_report(actual, live[col], label=f"spread{line:+g}"))
+        return rows
+
+    def market_report(self, joined: pd.DataFrame) -> list[dict]:
+        """The model against the posted line, and what betting it would return.
+
+        Two questions the rest of the metrics cannot answer. Beating the base
+        rate says a model knows something about football; beating the line says
+        it knows something the price does not; and only the ROI row says whether
+        that difference survives the hold. They are reported together on
+        purpose, because the first number on its own reads far better than the
+        position it describes.
+        """
+        rows: list[dict] = []
+        for outcome, model_col, market_col, label in (
+            ("home_margin", "home_margin_mean", self.MARKET_MARGIN_COL, "margin vs line"),
+            ("total_points", "total_points_mean", self.MARKET_TOTAL_COL, "total vs line"),
+        ):
+            if market_col not in joined.columns:
+                continue
+            comparison = MKT.market_comparison(
+                joined, model_col=model_col, market_col=market_col,
+                outcome_col=outcome, label=label,
+            )
+            if comparison:
+                rows.append(comparison)
+
+        rows.extend(self._moneyline_roi(joined))
+        return rows
+
+    def _moneyline_roi(self, joined: pd.DataFrame) -> list[dict]:
+        """Flat-stake return of backing every side the model calls +EV."""
+        needed = {"home_win_prob", "home_moneyline", "away_moneyline", "home_margin"}
+        if not needed.issubset(joined.columns):
+            return []
+        live = joined.dropna(subset=sorted(needed))
+        live = live[live["home_margin"] != 0]  # a tie settles neither side
+        if len(live) < 100:
+            return []
+
+        # Both sides of every game, so the report cannot flatter itself by
+        # quietly scoring only the half the model happened to like.
+        probability = np.concatenate([live["home_win_prob"], 1.0 - live["home_win_prob"]])
+        price = np.concatenate([live["home_moneyline"], live["away_moneyline"]])
+        won = np.concatenate([live["home_margin"] > 0, live["home_margin"] < 0]).astype(float)
+
+        rows = []
+        for min_ev, label in ((0.0, "moneyline +EV"), (0.10, "moneyline EV>10%")):
+            result = MKT.settle(probability, price, won, min_ev=min_ev)
+            if result.n:
+                rows.append({"target": label, **result.to_dict()})
+        # The zero-skill reference: back both sides of everything. Its ROI is
+        # the hold, and any selection rule worth using has to beat it.
+        rows.append({
+            "target": "moneyline every side",
+            **MKT.settle(probability, price, won, min_ev=-9.9).to_dict(),
+        })
         return rows
 
     def calibration(self, joined: pd.DataFrame) -> pd.DataFrame:
