@@ -3,7 +3,11 @@ package com.mlev.app.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import com.mlev.app.data.prefs.OddsFormat
 import com.mlev.app.data.prefs.Settings
 import com.mlev.app.data.prefs.SettingsRepository
@@ -209,5 +213,24 @@ class MlevViewModel(
         private const val KEY_SPORT = "sport"
         private const val KEY_SELECTED = "selected_fixture"
         private const val KEY_FILTER = "edge_filter"
+
+        /**
+         * Constructs the ViewModel explicitly, without reflection.
+         *
+         * The default factory finds a constructor reflectively, and AndroidX's
+         * R8 keep rules only cover ViewModels taking `()` or `(Application)`.
+         * This one takes `(Application, SavedStateHandle)`, so in a minified
+         * release build that lookup can fail even though debug works — a crash
+         * that only appears in the build you actually ship. Naming the
+         * constructor here removes the reflection, and with it the risk.
+         */
+        val Factory: ViewModelProvider.Factory = viewModelFactory {
+            initializer {
+                val application = checkNotNull(
+                    this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]
+                ) { "MlevViewModel needs an Application in CreationExtras" }
+                MlevViewModel(application, createSavedStateHandle())
+            }
+        }
     }
 }

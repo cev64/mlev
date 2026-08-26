@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.0.1 — fix: the app crashed on every launch
+
+### Fixed
+- **The app closed immediately on open.** `MainActivity` pinned
+  `AndroidViewModelFactory`, which can only construct a ViewModel whose
+  constructor is `(Application)` or `()`. `MlevViewModel` takes
+  `(Application, SavedStateHandle)`, so creating it threw before the first
+  frame — on every launch, every time. It now uses an explicit factory that
+  names the constructor outright, so neither the reflective default nor R8 can
+  break it.
+- **`Application.onCreate` could throw.** Scheduling the background sync called
+  `WorkManager.getInstance()`, which assumes the startup ContentProvider has
+  already run. WorkManager is now initialised on demand via
+  `Configuration.Provider`, and the scheduling call is wrapped — background sync
+  is a convenience and must never be able to stop the app opening.
+- Removed a `ColumnScope` workaround in the settings screen that prevented
+  normal layout modifiers being used inside a settings card.
+
+### Changed
+- **Minification is off for this release.** R8's renaming and stripping depends
+  on keep rules being exactly right for everything reached reflectively, and
+  those failures appear only in the shipped build. The rules look correct and
+  the mapping file confirms the serializers survive, but that is not
+  verification. Two megabytes are not worth an unverifiable crash; it can be
+  re-enabled once a build has been confirmed working on a device.
+
+### Added
+- `StartupTest` — launches the real Activity through `onCreate`, the theme, the
+  splash handover and the first composition, and recreates it. This is the test
+  that would have caught the crash; every existing test checked arithmetic,
+  which is worth doing and catches nothing about launching.
+- `ScreenRenderTest` — renders every screen, so a crash in Settings or About
+  cannot reach a phone unnoticed.
+
 ## 2.0.0 — native Android app
 
 ### Added

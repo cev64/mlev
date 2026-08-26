@@ -2,6 +2,7 @@ package com.mlev.app.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -158,14 +159,11 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SettingsCard(title: String, content: @Composable ColumnScopeAlias.() -> Unit) {
+private fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
-            ColumnScopeAlias.content()
+            content()
         }
     }
 }
-
-/** Keeps the card helper readable without leaking a ColumnScope receiver. */
-private object ColumnScopeAlias

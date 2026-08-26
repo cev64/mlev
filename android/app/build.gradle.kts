@@ -13,7 +13,7 @@ plugins {
  * downgrade. CI passes the run number in; a local build falls back to the base
  * so it can never accidentally exceed a CI build and block a later update.
  */
-val versionBase = 2
+val versionBase = 3
 val ciBuildNumber = (System.getenv("MLEV_BUILD_NUMBER") ?: "").toIntOrNull()
 val computedVersionCode = ciBuildNumber?.let { versionBase + it } ?: versionBase
 
@@ -45,7 +45,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = computedVersionCode
-        versionName = "2.0.0"
+        versionName = "2.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Room exports schemas so migrations can be written against real history.
         ksp { arg("room.schemaLocation", "$projectDir/schemas") }
@@ -64,8 +64,22 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Minification is off until a release build has been confirmed
+            // working on a real device.
+            //
+            // R8 renames and strips based on what it can see statically, and
+            // anything reached reflectively — ViewModel constructors, Room's
+            // generated classes, kotlinx.serialization serializers — depends on
+            // keep rules being exactly right. Those failures appear only in the
+            // build you ship, which is the one hardest to test. The rules in
+            // proguard-rules.pro look correct and the mapping file confirms the
+            // serializers survive, but "looks correct" is not verification, and
+            // the two megabytes it saves are not worth an unverifiable crash.
+            //
+            // To re-enable: set both to true, build, install on a device, and
+            // check the app opens, downloads a bundle, and the widget renders.
+            isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = if (hasReleaseSigning) {
                 signingConfigs.getByName("release")
@@ -125,6 +139,13 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
+    // Launching the real activity on the JVM: this is what catches a crash in
+    // the startup path, which unit-testing the maths never could.
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.junit)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.room.testing)
 }

@@ -50,6 +50,22 @@
             </intent-filter>
         </activity>
 
+        <!--
+          WorkManager is initialised on demand by MlevApplication rather than by
+          this provider, so the app never depends on provider ordering having
+          run before Application.onCreate.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
         <receiver
             android:name=".widget.EdgeWidgetReceiver"
             android:exported="false"

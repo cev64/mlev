@@ -7,7 +7,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.mlev.app.ui.MlevApp
@@ -25,9 +24,17 @@ import com.mlev.app.ui.theme.MlevTheme
  */
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: MlevViewModel by viewModels {
-        androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(application)
-    }
+    /**
+     * An explicit factory, deliberately not the reflective default.
+     *
+     * The first release pinned AndroidViewModelFactory, which can only build a
+     * ViewModel taking `(Application)` or `()` — this one takes a
+     * SavedStateHandle too, so every launch died. The default factory does
+     * handle that, but only by reflection, which R8 can break in a minified
+     * release while debug keeps working. [MlevViewModel.Factory] names the
+     * constructor outright, so neither failure is possible.
+     */
+    private val viewModel: MlevViewModel by viewModels { MlevViewModel.Factory }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
