@@ -11,17 +11,27 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.mlev.app.data.prefs.OddsFormat
@@ -58,6 +68,11 @@ fun FixtureDetail(
 ) {
     val listState = rememberLazyListState()
     val fixture = entry.fixture
+    // Which price field the user is in, if any. A filter re-evaluates on every
+    // keystroke, so without this a row could stop matching mid-entry, be
+    // removed from the list, and take the keyboard and the half-typed price
+    // with it. The row being edited stays put until focus leaves it.
+    var editingKey by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
@@ -82,7 +97,9 @@ fun FixtureDetail(
 
         entry.markets.forEach { market ->
             val visible = market.sides.filter { side ->
-                val typed = prices[side.key(fixture.id)].orEmpty()
+                val key = side.key(fixture.id)
+                if (key == editingKey) return@filter true
+                val typed = prices[key].orEmpty()
                 when (filter) {
                     EdgeFilter.ALL -> true
                     EdgeFilter.PRICED -> typed.isNotBlank()
@@ -104,16 +121,26 @@ fun FixtureDetail(
                                 "push %.1f%%".format(market.pushProbability * 100) else null,
                         )
                         visible.forEach { side ->
-                            val typed = prices[side.key(fixture.id)].orEmpty()
+                            val sideKey = side.key(fixture.id)
+                            val typed = prices[sideKey].orEmpty()
                             val opposing = market.sides.firstOrNull { it != side }
                                 ?.let { prices[it.key(fixture.id)] }
-                            SideRow(
-                                side = side,
-                                typed = typed,
-                                comparison = comparisonFor(side, typed, opposing, oddsFormat, stake),
-                                oddsFormat = oddsFormat,
-                                onChange = { onPriceChange(side, it) },
-                            )
+                            // Keyed on the side, so a row that appears or
+                            // disappears under a filter cannot hand its
+                            // half-typed text to whichever row takes its slot.
+                            key(sideKey) {
+                                SideRow(
+                                    side = side,
+                                    typed = typed,
+                                    comparison = comparisonFor(side, typed, opposing, oddsFormat, stake),
+                                    oddsFormat = oddsFormat,
+                                    onChange = { onPriceChange(side, it) },
+                                    onFocused = { focused ->
+                                        editingKey = if (focused) sideKey
+                                        else editingKey.takeIf { it != sideKey }
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -130,6 +157,7 @@ private fun SideRow(
     comparison: Odds.Comparison?,
     oddsFormat: OddsFormat,
     onChange: (String) -> Unit,
+    onFocused: (Boolean) -> Unit = {},
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -156,20 +184,11 @@ private fun SideRow(
                 modifier = Modifier.width(52.dp),
                 textAlign = TextAlign.End,
             )
-            OutlinedTextField(
-                value = typed,
-                onValueChange = onChange,
-                singleLine = true,
-                placeholder = { Text(if (oddsFormat == OddsFormat.AMERICAN) "-110" else "1.91") },
-                keyboardOptions = KeyboardOptions(
-                    // A minus sign is needed for American odds, so this is the
-                    // full numeric keyboard rather than a digits-only one.
-                    keyboardType = KeyboardType.Number,
-                    imeAction = ImeAction.Done,
-                ),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center,
-                ),
+            PriceField(
+                stored = typed,
+                oddsFormat = oddsFormat,
+                onChange = onChange,
+                onFocused = onFocused,
                 modifier = Modifier.width(104.dp),
             )
         }
@@ -190,6 +209,114 @@ private fun SideRow(
             }
         }
     }
+}
+
+/**
+ * The price the user types against a side.
+ *
+ * Two things this has to get right, both of which the obvious version gets
+ * wrong:
+ *
+ * 1. **The field owns its own text.** The saved price arrives back from Room,
+ *    which is at least one suspending hop away from the keystroke that caused
+ *    it. Feeding that value straight back into the field means every character
+ *    races the write that produced it: type at any speed and characters are
+ *    dropped or reordered, and the cursor jumps to the end of whatever text
+ *    arrives. Here the field's own state is authoritative while it is being
+ *    edited, and the stored value is adopted only when it changes for some
+ *    other reason — cleared from Settings, or a different fixture selected.
+ * 2. **A minus sign has to be reachable.** American odds are mostly negative,
+ *    and Android's plain number keyboard has no minus key at all, so the most
+ *    common price in the app could not be typed. The phone keypad has one.
+ *    Decimal odds never go negative, so that format keeps the decimal pad.
+ */
+@Composable
+private fun PriceField(
+    stored: String,
+    oddsFormat: OddsFormat,
+    onChange: (String) -> Unit,
+    onFocused: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val focusManager = LocalFocusManager.current
+    var field by remember { mutableStateOf(TextFieldValue(stored, TextRange(stored.length))) }
+    // Two separate facts, and conflating them is what broke the field before:
+    // `seen` is the last value the store showed us, `sent` the last value we
+    // gave it. A change in the store is only worth adopting when it is neither
+    // — otherwise it is this field's own edit arriving back, one or several
+    // keystrokes late, and adopting it rewinds what has been typed since.
+    var seen by remember { mutableStateOf(stored) }
+    var sent by remember { mutableStateOf(stored) }
+    if (stored != seen) {
+        seen = stored
+        if (stored != sent && stored != field.text) {
+            field = TextFieldValue(stored, TextRange(stored.length))
+        }
+    }
+
+    OutlinedTextField(
+        value = field,
+        onValueChange = { candidate ->
+            val cleaned = cleanPrice(candidate.text, candidate.selection.start, oddsFormat)
+            field = TextFieldValue(cleaned.text, TextRange(cleaned.caret))
+            if (cleaned.text != sent) {
+                sent = cleaned.text
+                onChange(cleaned.text)
+            }
+        },
+        singleLine = true,
+        placeholder = { Text(if (oddsFormat == OddsFormat.AMERICAN) "-110" else "1.91") },
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (oddsFormat == OddsFormat.AMERICAN) KeyboardType.Phone
+            else KeyboardType.Decimal,
+            imeAction = ImeAction.Done,
+        ),
+        // Done dismissed nothing before this: the keyboard stayed up over the
+        // numbers the user had just typed it to see.
+        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+        textStyle = MaterialTheme.typography.bodyMedium.copy(
+            fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center,
+        ),
+        modifier = modifier.onFocusChanged { onFocused(it.isFocused) },
+    )
+}
+
+internal data class CleanedPrice(val text: String, val caret: Int)
+
+/** How long a price can sensibly be: "-10000" and "1000.00" both fit. */
+private const val MAX_PRICE_LENGTH = 7
+
+/**
+ * Keep only what can be part of a price, and carry the cursor along with it.
+ *
+ * The phone keypad offers `+ - . , * # ;` and a hardware or software keyboard
+ * can send anything at all. Accepting those characters into the field means
+ * showing text that will never parse and silently scoring nothing; dropping
+ * them without tracking the cursor sends it to the end of the line mid-word.
+ */
+internal fun cleanPrice(raw: String, caret: Int, format: OddsFormat): CleanedPrice {
+    val out = StringBuilder()
+    var newCaret = 0
+    var decimalSeen = false
+    for ((index, char) in raw.withIndex()) {
+        val keep = when {
+            char.isDigit() -> true
+            // A sign is only a sign in front, and only where prices are signed.
+            (char == '-' || char == '+') ->
+                out.isEmpty() && format == OddsFormat.AMERICAN
+            // Some locales' keypads send a comma for the decimal separator.
+            (char == '.' || char == ',') && !decimalSeen && format == OddsFormat.DECIMAL -> {
+                decimalSeen = true
+                true
+            }
+            else -> false
+        }
+        if (keep && out.length < MAX_PRICE_LENGTH) {
+            out.append(if (char == ',') '.' else char)
+        }
+        if (index < caret) newCaret = out.length
+    }
+    return CleanedPrice(out.toString(), newCaret.coerceIn(0, out.length))
 }
 
 @Composable

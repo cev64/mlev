@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -112,10 +113,7 @@ class MlevViewModel(
     init {
         // First launch with no cached bundle: try once, quietly.
         viewModelScope.launch {
-            settingsRepo.settings.let { flow ->
-                val current = state.value
-                if (current.bundle == null) refresh()
-            }
+            if (state.value.bundle == null) refresh()
         }
     }
 
@@ -151,8 +149,7 @@ class MlevViewModel(
         if (transient.value.refreshing) return
         viewModelScope.launch {
             transient.value = transient.value.copy(refreshing = true, message = null)
-            val url = settingsRepo.settings.let { state.value.settings.bundleUrl }
-            val error = repository.refresh(sport.value, url)
+            val error = repository.refresh(sport.value, bundleUrl())
             transient.value = TransientState(
                 refreshing = false,
                 message = error,
@@ -164,7 +161,7 @@ class MlevViewModel(
     fun refreshAll() {
         viewModelScope.launch {
             transient.value = transient.value.copy(refreshing = true, message = null)
-            val url = state.value.settings.bundleUrl
+            val url = bundleUrl()
             val errors = Sport.entries.mapNotNull { repository.refresh(it, url) }
             transient.value = TransientState(
                 refreshing = false,
@@ -174,13 +171,42 @@ class MlevViewModel(
         }
     }
 
+    /**
+     * The address to download from, read from storage rather than from [state].
+     *
+     * [state] is shared `WhileSubscribed`, so with no screen collecting it —
+     * the refresh on launch, or one started from the widget — its value is
+     * still the default `Settings()`. Reading the address from there meant a
+     * user who had pointed the app somewhere else silently got a download from
+     * the default address instead.
+     */
+    private suspend fun bundleUrl(): String = settingsRepo.settings.first().bundleUrl
+
     fun dismissMessage() { transient.value = transient.value.copy(message = null) }
 
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { settingsRepo.setThemeMode(mode) }
     fun setDynamicColor(on: Boolean) = viewModelScope.launch { settingsRepo.setDynamicColor(on) }
     fun setOddsFormat(f: OddsFormat) = viewModelScope.launch { settingsRepo.setOddsFormat(f) }
     fun setStake(stake: Double) = viewModelScope.launch { settingsRepo.setStake(stake) }
-    fun setBundleUrl(url: String) = viewModelScope.launch { settingsRepo.setBundleUrl(url) }
+    /**
+     * Save the address, then download from it.
+     *
+     * One action, in that order, deliberately. Saving and refreshing as two
+     * independent coroutines raced: the refresh usually won, read the address
+     * DataStore had not yet been updated with, and fetched from the old one —
+     * so "Save and refresh" appeared to ignore what had just been typed.
+     */
+    fun setBundleUrl(url: String) = viewModelScope.launch {
+        settingsRepo.setBundleUrl(url)
+        refreshNow()
+    }
+
+    private suspend fun refreshNow() {
+        transient.value = transient.value.copy(refreshing = true, message = null)
+        val error = repository.refresh(sport.value, bundleUrl())
+        transient.value = TransientState(refreshing = false, message = error, loaded = true)
+    }
+
     fun clearPrices() = viewModelScope.launch { repository.clearPrices(sport.value) }
 
     /**
