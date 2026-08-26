@@ -35,10 +35,23 @@
 - Done on the keyboard closes the keyboard, and the address field no longer
   offers autocorrect or a capital first letter.
 
+- **Back closed the app from anywhere.** Nothing handled the back gesture, so a
+  press exited outright — from Settings, from About, and from a fixture detail
+  on a phone, where the detail is a page the user navigated to and back is the
+  obvious way out of it. Back now returns to the markets from Settings and
+  About, and to the fixture list from a detail. At the top of the app, and on
+  widths that show the list and the detail together, it still leaves.
+- **A sport with nothing published read as a broken setup.** An EPL bundle that
+  is not there yet returned the same "no bundle published at that address"
+  message as a wrong address, which sends people to change an address that
+  works. A missing bundle for one sport now says so in its own words.
+
 ### Added
 - `TextEntryTest` — types into the fields rather than only rendering them,
   including a store that never answers, which is what the render tests could
   never catch.
+- `BackNavigationTest` — presses back on each screen, including the case that
+  must keep working: back at the top of the app still closes it.
 
 ## 2.0.1 — fix: the app crashed on every launch
 

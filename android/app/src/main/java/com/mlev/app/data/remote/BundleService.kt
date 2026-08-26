@@ -23,7 +23,17 @@ class BundleService(private val json: Json = DEFAULT_JSON) {
 
     sealed interface Result<out T> {
         data class Success<T>(val value: T) : Result<T>
-        data class Failure(val reason: String, val recoverable: Boolean = true) : Result<Nothing>
+        /**
+         * [notFound] separates "nothing is published for this sport" from
+         * every other failure. They read identically to the network layer and
+         * mean opposite things to the user: one is a wrong address or a broken
+         * export, the other is the normal state of a sport between fixtures.
+         */
+        data class Failure(
+            val reason: String,
+            val recoverable: Boolean = true,
+            val notFound: Boolean = false,
+        ) : Result<Nothing>
     }
 
     suspend fun fetchBundle(baseUrl: String, sport: String): Result<BundleDto> =
@@ -67,6 +77,7 @@ class BundleService(private val json: Json = DEFAULT_JSON) {
                 404 -> Result.Failure(
                     "No bundle published at that address yet. If you just set this " +
                         "up, the first export may not have run.",
+                    notFound = true,
                 )
                 in 500..599 -> Result.Failure("The server is having trouble (HTTP $code).")
                 else -> Result.Failure("Unexpected response (HTTP $code).")
