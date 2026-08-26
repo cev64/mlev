@@ -74,7 +74,18 @@ class MlevRepository(
                 )
                 null
             }
-            is BundleService.Result.Failure -> result.reason
+            // A sport with nothing published is not a broken setup, and saying
+            // so stops the message sending people to change an address that
+            // works. EPL fixtures are exported only once the schedule feed
+            // lists them, which it does a few days out, so an empty spell
+            // between matchdays is the normal state and not a fault.
+            is BundleService.Result.Failure ->
+                if (result.notFound) {
+                    "No ${sport.label} predictions are published yet — they are " +
+                        "exported once the fixtures are within a few days."
+                } else {
+                    result.reason
+                }
         }
 
     suspend fun savePrice(sport: Sport, fixtureId: String, market: String, side: String, odds: String) {

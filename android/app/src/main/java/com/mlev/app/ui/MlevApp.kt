@@ -1,5 +1,6 @@
 package com.mlev.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -91,6 +92,24 @@ fun MlevApp(
     var destination by rememberSaveable { mutableStateOf(Destination.MARKETS) }
     // In compact the detail is a separate page; expanded shows both at once.
     var showingDetail by rememberSaveable { mutableStateOf(false) }
+
+    // Back goes back through the app before it leaves it.
+    //
+    // Nothing handled it before, so every press closed the app outright: from
+    // Settings, from About, and — worst of it — from a fixture detail on a
+    // phone, where the detail is a page the user navigated to and back is the
+    // obvious way out of it. On a compact width that made the detail a trap
+    // with one exit, the bottom bar. Expanded is different and deliberately
+    // unhandled: the list and the detail are on screen together, so there is
+    // nothing to pop, and back should leave.
+    val detailIsAPage = !expanded && showingDetail
+    BackHandler(enabled = destination != Destination.MARKETS || detailIsAPage) {
+        if (destination != Destination.MARKETS) {
+            destination = Destination.MARKETS
+        } else {
+            showingDetail = false
+        }
+    }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(state.message) {
