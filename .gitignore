@@ -12,3 +12,6 @@ data/**/*.parquet
 data/**/*.joblib
 data/**/*.json
 !data/**/.gitkeep
+
+# Exported prediction bundles (regenerate with export_bundle.py)
+dist/
