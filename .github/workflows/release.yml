@@ -1,0 +1,94 @@
+name: Release APK
+
+# Triggered by a version tag. Builds a release APK signed with the persistent
+# identity, so it installs over the app already on the phone and keeps its data.
+#
+#   git tag v2.1.0 && git push origin v2.1.0
+#
+# Requires these repository secrets (see android/tools/make-keystore.sh):
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+#   ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse to build unsigned
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set."
+            echo "A release built without it would be debug-signed and could not"
+            echo "update the installed app. Run android/tools/make-keystore.sh and"
+            echo "add the secrets before tagging a release."
+            exit 1
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Restore the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          # Written to the runner's temp dir, which is destroyed with the job.
+          # Never echoed, never written into the workspace.
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          chmod 600 "$RUNNER_TEMP/release.jks"
+
+      - name: Unit tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Build signed release
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # versionCode = base + run number, so it only ever increases.
+          MLEV_BUILD_NUMBER: ${{ github.run_number }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Verify it is really signed with the release key
+        working-directory: android
+        run: |
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee /tmp/certs.txt
+          if grep -q "CN=Android Debug" /tmp/certs.txt; then
+            echo "::error::This APK is debug-signed and cannot update the installed app."
+            exit 1
+          fi
+          mv "$APK" "app-${GITHUB_REF_NAME}.apk"
+
+      - name: Clean up the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Attach the APK to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app-*.apk
+          generate_release_notes: true
+          body: |
+            Install this straight over the version already on your phone — it
+            keeps your saved prices and settings.

@@ -49,8 +49,12 @@ app/                  the local web UI (Flask + one HTML page)
   static/             the page itself
 Start mlev.command    double-click launcher for macOS
 Start mlev (phone).command   ...and one that also serves your local network
-android/              the Android app (WebView client) + its build script
-  mlev.apk            prebuilt, debug-signed, ready to sideload
+
+export_bundle.py      publish predictions the phone can work from, unaided
+android/              native Kotlin/Compose app (see PRODUCT_SPEC.md)
+  app/src/main/       domain (maths, markets) · data (Room, DataStore) · ui · widget
+  tools/make-keystore.sh   creates the one persistent signing key
+.github/workflows/    tests, signed release APK, scheduled prediction publishing
 ```
 
 Entrypoints:
@@ -59,7 +63,7 @@ Entrypoints:
 |---|---|
 | `Start mlev.command` | **double-click on a Mac** — sets up, launches the web app |
 | `Start mlev (phone).command` | the same, also reachable from your phone |
-| `android/build-apk.sh` | rebuild the Android app (needs the Android SDK) |
+| `export_bundle.py` | export prediction bundles for the Android app |
 | `run_backfill.py` | pull raw data, rebuild clean + feature layers |
 | `run_backtest.py` | walk-forward evaluation |
 | `run_scoring.py` | score the upcoming week / matchday |
@@ -437,10 +441,105 @@ pipeline, for the residual missing values that survive the thin-history filter.
 That statistic is learned from the training fold only, so it cannot carry
 information backwards from the test fold.
 
+---
+
+## The Android app
+
+Native Kotlin / Jetpack Compose / Material 3. `PRODUCT_SPEC.md` covers the
+screens and data model; this is the build and release side.
+
+### Independence
+
+The app needs no computer. The pipeline publishes a **prediction bundle** — each
+fixture's predictive *distribution*, not a fixed list of probabilities — and the
+phone derives every market from it on-device, including lines nobody
+precomputed. A full NFL week is about 5 KB.
+
+That is the whole reason `core/bundle.py` exports parameters rather than
+answers, and the reason the distribution and odds maths are ported to Kotlin
+(39 unit tests, checked against the Python model's own numbers).
+
+### Building
+
+```bash
+cd android
+./gradlew testDebugUnitTest      # unit tests
+./gradlew assembleDebug          # installable, debug-signed
+./gradlew assembleRelease        # release build
+```
+
+Requires the Android SDK and JDK 17. `local.properties` or `ANDROID_HOME` must
+point at the SDK.
+
+### Release signing
+
+Android identifies an app by its **application id and its signing certificate**.
+An APK signed with a different key cannot install over an existing one, and the
+only way past that is uninstalling — which destroys the app's data. So there is
+exactly one signing key, created once:
+
+```bash
+./android/tools/make-keystore.sh
+```
+
+It writes the keystore to `~/.mlev-signing/` (outside the repo, gitignored),
+creates `android/keystore.properties` for local builds, and prints the four
+GitHub secrets to add:
+
+`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`,
+`ANDROID_KEY_PASSWORD`.
+
+**Back the keystore up.** Losing it means losing the ability to update the
+installed app, permanently. The release workflow refuses to build if the secret
+is missing, rather than quietly producing a debug-signed APK that looks fine
+until it will not install.
+
+### Versioning
+
+`versionName` is set by hand (`2.0.0`). `versionCode` is `2 + CI run number`, so
+it only ever increases — Android rejects an install whose versionCode is not
+higher than what is installed. A local build uses the base, so it can never
+overtake a CI build and block a later update.
+
+Release by tag:
+
+```bash
+git tag v2.1.0 && git push origin v2.1.0
+```
+
+which runs tests, builds, verifies the APK is not debug-signed, and attaches it
+to the GitHub release.
+
+### Upgrade in place
+
+Three things must hold for a new APK to update the installed app rather than be
+rejected:
+
+1. same `applicationId` (`com.mlev.app` — permanent)
+2. same signing certificate
+3. higher `versionCode`
+
+If an install is refused, that ordering is the checklist. **Uninstalling is a
+last resort**, not a first fix: it deletes saved prices and settings.
+
+Room migrations are non-destructive by policy, and
+`fallbackToDestructiveMigration` is deliberately absent — a missing migration
+should fail in testing rather than wipe a phone.
+
+### Before trusting it with anything
+
+Worth doing once, per `AGENT_INSTRUCTIONS.md`: install a build, type some
+prices, add the widget, then build with a higher versionCode and install it
+directly over the top. Confirm Android treats it as an update, the prices are
+still there, and the widget still works.
+
+---
+
 ## Tests
 
 ```bash
-python -m pytest tests/ -q
+python -m pytest tests/ -q       # Python: pipeline, models, bundle contract
+cd android && ./gradlew test     # Kotlin: distributions, scoreline, odds
 ```
 
 101 tests. The leakage guards in `tests/test_point_in_time.py` and

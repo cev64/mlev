@@ -1,0 +1,76 @@
+name: Publish predictions
+
+# Runs the modelling pipeline and publishes the prediction bundles the phone
+# downloads. This is what makes the app independent of any one computer.
+#
+# NFL: Tuesday and Friday mornings, after the week's games have settled and
+# again once lines have moved. EPL: daily, because matchdays are scattered.
+on:
+  schedule:
+    - cron: "0 11 * * 2,5"
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+    inputs:
+      sport:
+        description: "Which sport (blank for both)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: predictions
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Pull data and rebuild features
+        run: |
+          python run_backfill.py --sport nfl
+          python run_backfill.py --sport epl
+
+      - name: Backtest
+        # The bundle carries these numbers so the app can show the evidence
+        # behind a probability rather than just the probability.
+        run: |
+          python run_backtest.py --sport nfl --level game
+          python run_backtest.py --sport epl --level game
+
+      - name: Export bundles
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.sport }}" ]; then ARGS="--sport ${{ inputs.sport }}"; fi
+          python export_bundle.py $ARGS --out dist --index
+
+      - name: Verify the bundles are readable
+        run: python -m pytest tests/test_bundle.py -q
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

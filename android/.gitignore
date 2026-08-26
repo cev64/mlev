@@ -1,5 +1,24 @@
+# Build output
 build/
-*.keystore
-# mlev.apk is deliberately committed — it is the deliverable, it is 64KB, and
-# building it otherwise means installing the Android SDK.
+.gradle/
+local.properties
+*.apk
+*.aab
 *.idsig
+
+# Signing — these must never enter the repository. The keystore is the app's
+# permanent update identity; committing it would hand anyone the ability to
+# sign an update to your installed app.
+keystore.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Kotlin compiler scratch
+.kotlin/

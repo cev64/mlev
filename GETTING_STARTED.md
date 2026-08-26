@@ -138,58 +138,71 @@ reload or the phone locking.
 
 ---
 
-## Using it on your phone
+## The Android app
 
-The models need Python, pandas and about 100 MB of data, so they cannot run on a
-phone. The phone is a client; your Mac does the work. Both need to be on the same
-Wi-Fi.
+**It does not need your Mac.** The app downloads published predictions over the
+internet and computes every market on the phone.
 
-### Start the Mac with phone access
+### Install it
 
-Double-click **`Start mlev (phone).command`** instead of the usual one. It prints
-an address and a QR code:
+Get `app-v2.0.0.apk` from the repo's Releases page on your phone and tap it.
+Android warns about installing outside the Play Store — expected for any
+sideloaded app. Allow it for your browser, then tap the file again.
+
+Installing over an earlier version keeps your saved prices and settings. You
+should never need to uninstall first.
+
+### Point it at your predictions
+
+Once, in Settings, set **where predictions are published**. If you have enabled
+the GitHub Actions workflow (below) that is:
 
 ```
-  On your phone, on the same Wi-Fi, open:
-      http://192.168.1.42:8733
+https://<your-github-username>.github.io/mlev
 ```
 
-While it is running, anyone on your network can reach it. Use the plain
-`Start mlev.command` when you only want it on the Mac.
+Tap **Save and refresh**. From then on it updates itself in the background.
 
-### Install the Android app
+### Publishing predictions
 
-`android/mlev.apk` in the repo is a ready-to-install app. Copy it to your phone
-(AirDrop-equivalent, USB, Google Drive, or email it to yourself) and tap it.
+`.github/workflows/predictions.yml` runs the pipeline on a schedule — NFL on
+Tuesdays and Fridays, EPL daily — and publishes the bundles to GitHub Pages.
 
-Android will warn you about installing from an unknown source — that is expected
-for any app not from the Play Store. Allow it for whichever app you are
-installing from, then tap the file again.
+Enable it once: repository **Settings → Pages → Source → GitHub Actions**. Then
+either wait for the schedule or run it manually from the Actions tab.
 
-On first launch it asks for your Mac's address. Type what the Terminal printed —
-`192.168.1.42:8733`, or just `192.168.1.42` and it fills in the port. It
-remembers it. **Long-press volume-down** to change it later, which you will need
-if your Mac's address changes after rejoining the network.
+You can also publish from your Mac instead:
 
-### Why an app and not just a bookmark
+```bash
+python export_bundle.py --out dist --index
+```
 
-A web app can normally be installed to the home screen and run full screen. That
-needs a secure context — HTTPS — and your Mac serves plain HTTP on your Wi-Fi. So
-"Add to Home Screen" would give you a browser tab with a nice icon, not a real
-app. The APK has no such restriction: real icon, full screen, no browser chrome.
+and point the app at any host serving that folder — including your Mac on the
+local Wi-Fi, which is handy for checking an export before publishing it.
 
-### When your Mac is asleep
+### How it works offline
 
-The app keeps the last numbers you loaded and shows them with a note saying how
-old they are. The EV calculator keeps working offline too — it does the same
-arithmetic in the browser. What you cannot do offline is generate *new*
-predictions, because that needs the models.
+Everything except downloading a new bundle. The predictions are stored on the
+phone, and the app derives every market — including lines nobody precomputed —
+from the stored distributions. Typing a price and reading the expected value
+works on a plane.
 
 ### On a foldable
 
-The layout is built for it. Folded, each market side is three short lines and
-nothing is truncated. Unfolded, fixtures go two columns. It reflows when you open
-or close the phone, no restart needed.
+Folded, you get a fixture list and tap through to one game. Unfolded, the list
+and the game sit side by side, so the extra space shows more information rather
+than the same information stretched. Folding mid-session keeps your selection,
+scroll position and half-typed price.
+
+### The old WebView app
+
+Version 1 was a shell around the Mac's web interface. Version 2 replaces it and
+installs over it. One thing does not carry across: prices typed into the old
+version lived in the WebView's browser storage, which a native app cannot read.
+Anything typed from 2.0.0 onward is stored properly and survives every update.
+
+The Mac web interface is unchanged and still where you run backfills, backtests
+and scoring — `Start mlev.command` as before.
 
 ---
 

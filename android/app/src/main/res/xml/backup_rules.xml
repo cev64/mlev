@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What is worth backing up: the Room database (saved prices and notes — the only
+  data the user created) and DataStore preferences.
+
+  The cached bundle lives in the same database and is re-downloadable, so it
+  riding along costs a few tens of kilobytes and saves a restored phone from
+  opening to an empty screen.
+-->
+<full-backup-content>
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="." />
+    <include domain="file" path="datastore/" />
+</full-backup-content>

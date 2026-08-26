@@ -1,0 +1,22 @@
+name: Python
+
+on:
+  push:
+    paths: ["core/**", "sports/**", "tests/**", "*.py", "requirements.txt", ".github/workflows/python.yml"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Tests
+        # test_bundle.py needs exported bundles, which need the full data
+        # backfill; the predictions workflow covers those.
+        run: python -m pytest tests/ -q --ignore=tests/test_bundle.py
