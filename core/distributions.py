@@ -190,6 +190,144 @@ class NegativeBinomialDistribution(PredictiveDistribution):
         return float(1.0 - stats.nbinom.cdf(k - 1, self._n, self._p))
 
 
+class LatticeShape:
+    """The key-number structure of a discrete outcome, learned from history.
+
+    Football margins are not smooth. 14.7% of NFL games are decided by exactly
+    3 points and 8.5% by exactly 7, because scores are built out of 3s and 7s.
+    A Normal distribution puts about 3% on each, so it cannot price a -3 spread,
+    where the push is the single biggest term.
+
+    The fix is to separate two things that a Normal conflates:
+
+    * *where* the distribution sits and how wide it is - that is what the
+      regression model predicts, and it moves game to game;
+    * *which values are intrinsically common* - that is a property of how
+      football scoring works, and barely moves at all.
+
+    This class captures the second part as a multiplicative `bump` per integer:
+    the ratio of how often a value actually occurs to how often a smooth
+    distribution of the same shape would produce it. Values on key numbers get
+    a bump above 1; a tie, which needs overtime to finish level, gets a bump
+    well below 1.
+
+    Fitted on the training fold only.
+    """
+
+    __slots__ = ("values", "bump", "_lookup")
+
+    # Values seen fewer times than this are not evidence of anything.
+    MIN_COUNT = 5
+    # Half-width of the smoothing window used to build the reference density.
+    SMOOTH_HALFWIDTH = 4
+    # A bump outside this range is noise, not structure.
+    BUMP_CLIP = (0.05, 8.0)
+
+    def __init__(self, values: np.ndarray, bump: np.ndarray) -> None:
+        self.values = np.asarray(values, dtype=float)
+        self.bump = np.asarray(bump, dtype=float)
+        self._lookup = {int(v): float(b) for v, b in zip(self.values, self.bump)}
+
+    @classmethod
+    def from_outcomes(cls, outcomes: np.ndarray) -> "LatticeShape":
+        y = np.asarray(outcomes, dtype=float)
+        y = y[np.isfinite(y)]
+        y = np.round(y).astype(int)
+        if y.size < 200:
+            raise ValueError(f"need at least 200 outcomes to learn a lattice shape, got {y.size}")
+
+        lo, hi = int(y.min()), int(y.max())
+        grid = np.arange(lo, hi + 1)
+        counts = np.bincount(y - lo, minlength=grid.size).astype(float)
+        empirical = counts / counts.sum()
+
+        # Reference density: the same histogram smoothed over a window wide
+        # enough to erase the key-number spikes but narrow enough to keep the
+        # overall shape. The ratio of the two is what the spikes actually are.
+        width = 2 * cls.SMOOTH_HALFWIDTH + 1
+        kernel = np.ones(width) / width
+        reference = np.convolve(empirical, kernel, mode="same")
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            bump = np.where(reference > 0, empirical / reference, 1.0)
+        # Only trust the bump where there is enough data behind it.
+        bump = np.where(counts >= cls.MIN_COUNT, bump, 1.0)
+        bump = np.clip(np.nan_to_num(bump, nan=1.0), *cls.BUMP_CLIP)
+        return cls(grid.astype(float), bump)
+
+    def factor(self, value: float) -> float:
+        """Bump for one value; 1.0 (no adjustment) outside the learned range."""
+        return self._lookup.get(int(round(value)), 1.0)
+
+    def top_key_numbers(self, n: int = 6) -> list[tuple[int, float]]:
+        """The most inflated values — a readable summary of what was learned."""
+        order = np.argsort(self.bump)[::-1][:n]
+        return [(int(self.values[i]), float(self.bump[i])) for i in order]
+
+
+class LatticeDistribution(PredictiveDistribution):
+    """A discrete predictive distribution over integers, with key numbers.
+
+    Built as `smooth density at the predicted mean and spread` x `the learned
+    lattice shape`, renormalised. The regression model decides where the mass
+    sits; the lattice shape decides how it clumps onto football's real scoring
+    values.
+    """
+
+    __slots__ = ("mu", "sigma", "_values", "_weights", "_cum")
+
+    # Support runs this many predicted standard deviations either side.
+    SUPPORT_SDS = 5.0
+
+    def __init__(self, mu: float, sigma: float, shape: LatticeShape) -> None:
+        if not np.isfinite(mu) or not np.isfinite(sigma) or sigma <= 0:
+            raise ValueError(f"LatticeDistribution needs finite mu and positive sigma, got {mu}, {sigma}")
+        self.mu = float(mu)
+        self.sigma = float(sigma)
+
+        lo = int(np.floor(mu - self.SUPPORT_SDS * sigma))
+        hi = int(np.ceil(mu + self.SUPPORT_SDS * sigma))
+        values = np.arange(lo, hi + 1, dtype=float)
+
+        # Integrate the smooth density across each integer's cell rather than
+        # sampling it at the centre, so the weights are a genuine pmf.
+        upper = stats.norm.cdf(values + 0.5, mu, sigma)
+        lower = stats.norm.cdf(values - 0.5, mu, sigma)
+        weights = (upper - lower) * np.array([shape.factor(v) for v in values])
+
+        total = weights.sum()
+        if not np.isfinite(total) or total <= 0:
+            raise ValueError("lattice distribution collapsed to zero mass")
+        self._values = values
+        self._weights = weights / total
+        self._cum = np.cumsum(self._weights)
+
+    @property
+    def mean(self) -> float:
+        return float(np.dot(self._values, self._weights))
+
+    @property
+    def var(self) -> float:
+        return float(np.dot((self._values - self.mean) ** 2, self._weights))
+
+    def cdf(self, x: float) -> float:
+        idx = np.searchsorted(self._values, x, side="right") - 1
+        return float(self._cum[idx]) if idx >= 0 else 0.0
+
+    def pmf_or_pdf(self, x: float) -> float:
+        return self.prob_exactly(x)
+
+    def prob_exactly(self, x: float) -> float:
+        if abs(x - round(x)) > 1e-9:
+            return 0.0
+        match = np.isclose(self._values, round(x))
+        return float(self._weights[match].sum()) if match.any() else 0.0
+
+    def quantile(self, q: float) -> float:
+        idx = int(np.searchsorted(self._cum, q))
+        return float(self._values[min(idx, self._values.size - 1)])
+
+
 @dataclass(frozen=True)
 class BernoulliOutcome(PredictiveDistribution):
     """A binary event: home win, anytime touchdown, player to be carded."""

@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from core.config import SportConfig
+from core.elo import pregame_ratings
 from core.features import (
     drop_thin_history,
     ewm_prior_mean,
@@ -131,13 +132,23 @@ def build_game_features(config: SportConfig) -> pd.DataFrame:
         )
     )
 
-    carry = ["game_id", "team", *feature_cols]
+    # Deliberately no "team" column here. Prefixing it would produce a second
+    # `home_team`, which pandas then suffixes to home_team_x/home_team_y in the
+    # merge below and quietly removes the real one. The join is on game_id and
+    # `games` already carries home_team/away_team.
+    carry = ["game_id", *feature_cols]
     home = form.loc[form["is_home"] == 1, carry].add_prefix("home_")
     home = home.rename(columns={"home_game_id": "game_id"})
     away = form.loc[form["is_home"] == 0, carry].add_prefix("away_")
     away = away.rename(columns={"away_game_id": "game_id"})
 
     out = games.merge(home, on="game_id", how="left").merge(away, on="game_id", how="left")
+    for required in ("home_team", "away_team"):
+        if required not in out.columns:
+            raise KeyError(
+                f"{required} was lost in the form join — a prefixed column collided "
+                "with it. Check the `carry` list above."
+            )
 
     # Differences carry most of the signal for a margin/total model; giving the
     # linear baseline the difference directly saves it from having to learn a
@@ -148,6 +159,14 @@ def build_game_features(config: SportConfig) -> pd.DataFrame:
         h, a = f"home_{col}", f"away_{col}"
         if h in out.columns and a in out.columns:
             out[f"diff_{col}"] = out[h] - out[a]
+
+    # Opponent-adjusted strength. The rolling features above average a team's
+    # own production and cannot tell a good number against a weak schedule from
+    # the same number against a hard one; Elo scales every update by who the
+    # opponent was. Computed chronologically, each game reading the ratings the
+    # two teams carried *into* it, so it is point-in-time like everything else.
+    elo = pregame_ratings(out)
+    out = out.join(elo)
 
     out["rest_diff"] = out["home_rest"] - out["away_rest"]
     out["is_short_week_home"] = (out["home_rest"] <= 4).astype(int)
@@ -174,6 +193,7 @@ def game_feature_columns(features: pd.DataFrame) -> list[str]:
         if c.startswith("diff_") or c.endswith(("_ewm", "_sd_r8"))
     ]
     context = [
+        "elo_diff", "elo_win_prob", "home_elo", "away_elo",
         "home_win_rate_r8", "away_win_rate_r8",
         "home_rest", "away_rest", "rest_diff",
         "is_short_week_home", "is_short_week_away",

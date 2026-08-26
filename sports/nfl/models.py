@@ -17,9 +17,12 @@ is the point of routing everything through `core.models`.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
-from core.backtest import TargetSpec
+from core import metrics as M
+from core.backtest import MarketModel, TargetSpec, _normal_coverage
+from core.distributions import LatticeDistribution, LatticeShape
 from core.models import (
     BinaryProbabilityModel,
     GaussianRegressionModel,
@@ -161,3 +164,168 @@ def player_targets() -> list[TargetSpec]:
             row_filter=_is_skill,
         ),
     ]
+
+
+class JointGameModel(MarketModel):
+    """All three NFL game markets derived from one pair of fitted distributions.
+
+    The problem this replaces: fitting win probability, margin and total as three
+    independent models lets them disagree. The old bundle produced a 0.679
+    moneyline and a 0.662 `P(margin > 0)` for the same game, which cannot both
+    be right.
+
+    Here a margin model and a total model are fitted, and every market is read
+    off them:
+
+    * moneyline      = P(margin > 0), with the tie handled explicitly
+    * spread cover   = P(margin > line), plus the push probability at whole numbers
+    * total over     = P(total > line), plus the push
+    * team scores    = (E[total] +/- E[margin]) / 2
+
+    The distributions are `LatticeDistribution`, not Normal, which is what makes
+    the push probabilities real. A Normal prices a -3 push at 3% when it is
+    really 15%, and prices a tie at 3% when it is really 0.35%. The lattice
+    shape is learned from the training fold only.
+    """
+
+    # Whole-number spreads (where a push is possible) and the common hooks.
+    SPREAD_LINES = (-10.5, -7.0, -6.5, -3.5, -3.0, -2.5, 0.0, 2.5, 3.0, 3.5, 6.5, 7.0, 10.5)
+    TOTAL_LINES = (37.5, 41.5, 44.5, 47.5, 51.5, 44.0, 47.0)
+
+    def __init__(
+        self,
+        feature_cols: list[str],
+        *,
+        recency_halflife_seasons: float | None = 4.0,
+        season_col: str = "season",
+        empirical: bool = True,
+    ) -> None:
+        self.feature_cols = list(feature_cols)
+        self.recency_halflife_seasons = recency_halflife_seasons
+        self.season_col = season_col
+        self.empirical = empirical
+        self.margin_model: GaussianRegressionModel | None = None
+        self.total_model: GaussianRegressionModel | None = None
+        self.margin_shape_: LatticeShape | None = None
+        self.total_shape_: LatticeShape | None = None
+
+    def _weights(self, rows: pd.DataFrame) -> np.ndarray | None:
+        if self.recency_halflife_seasons is None or self.season_col not in rows.columns:
+            return None
+        seasons_ago = rows[self.season_col].max() - rows[self.season_col]
+        return np.power(0.5, seasons_ago / self.recency_halflife_seasons).to_numpy(dtype=float)
+
+    def fit(self, train: pd.DataFrame) -> "JointGameModel":
+        rows = train.dropna(subset=["home_margin", "total_points"])
+        if len(rows) < 100:
+            raise ValueError(f"only {len(rows)} completed games to fit the joint game model")
+        weights = self._weights(rows)
+
+        self.margin_model = GaussianRegressionModel(
+            self.feature_cols, heteroskedastic=True, name="home_margin"
+        ).fit(rows, rows["home_margin"], weights)
+        self.total_model = GaussianRegressionModel(
+            self.feature_cols, heteroskedastic=True, name="total_points"
+        ).fit(rows, rows["total_points"], weights)
+
+        if self.empirical:
+            # Learned from outcomes, not residuals: the 3- and 7-point spikes
+            # live in absolute margin space. Standardising by each row's own
+            # predicted mean would smear them away, which is exactly the bug
+            # this replaced.
+            self.margin_shape_ = LatticeShape.from_outcomes(rows["home_margin"].to_numpy())
+            self.total_shape_ = LatticeShape.from_outcomes(rows["total_points"].to_numpy())
+        return self
+
+    def _distribution(self, shape: LatticeShape | None, row_dist):
+        if not self.empirical or shape is None:
+            return row_dist
+        return LatticeDistribution(row_dist.mean, row_dist.sd, shape)
+
+    def predict_frame(self, test: pd.DataFrame) -> pd.DataFrame:
+        if self.margin_model is None or self.total_model is None:
+            raise ValueError("call fit() before predict_frame()")
+
+        margin_base = self.margin_model.predict_dist(test)
+        total_base = self.total_model.predict_dist(test)
+
+        records = []
+        for m_base, t_base in zip(margin_base, total_base):
+            margin = self._distribution(self.margin_shape_, m_base)
+            total = self._distribution(self.total_shape_, t_base)
+
+            push_zero = margin.prob_exactly(0.0)
+            home_win = margin.prob_over(0.0)
+            # A tie is not a home win. Renormalise so the moneyline pair sums to
+            # one over the non-tie outcomes, which is how the market settles.
+            denominator = max(1.0 - push_zero, 1e-9)
+            row = {
+                "home_win_prob": home_win / denominator,
+                "tie_prob": push_zero,
+                "home_margin_mean": margin.mean,
+                "home_margin_sd": margin.sd,
+                "home_margin_p10": margin.quantile(0.10),
+                "home_margin_p50": margin.quantile(0.50),
+                "home_margin_p90": margin.quantile(0.90),
+                "total_points_mean": total.mean,
+                "total_points_sd": total.sd,
+                "total_points_p10": total.quantile(0.10),
+                "total_points_p90": total.quantile(0.90),
+                "exp_home_score": (total.mean + margin.mean) / 2.0,
+                "exp_away_score": (total.mean - margin.mean) / 2.0,
+            }
+            for line in self.SPREAD_LINES:
+                key = _line_key(line)
+                row[f"home_cover_{key}"] = margin.prob_over(-line)
+                row[f"home_push_{key}"] = margin.prob_exactly(-line)
+            for line in self.TOTAL_LINES:
+                key = _line_key(line)
+                row[f"total_over_{key}"] = total.prob_over(line)
+                row[f"total_push_{key}"] = total.prob_exactly(line)
+            records.append(row)
+
+        return pd.DataFrame(records, index=test.index)
+
+    def evaluate(self, joined: pd.DataFrame) -> list[dict]:
+        rows: list[dict] = []
+        wins = joined.dropna(subset=["home_win", "home_win_prob"])
+        if not wins.empty:
+            rows.append(M.classification_report(wins["home_win"], wins["home_win_prob"], label="home_win"))
+        for outcome, pred in (("home_margin", "home_margin_mean"), ("total_points", "total_points_mean")):
+            sub = joined.dropna(subset=[outcome, pred])
+            if sub.empty:
+                continue
+            report = M.regression_report(sub[outcome], sub[pred], label=outcome)
+            sd_col = pred.replace("_mean", "_sd")
+            if sd_col in sub.columns:
+                report["cov80"] = round(
+                    _normal_coverage(sub[pred], sub[sd_col], sub[outcome]), 4
+                )
+            rows.append(report)
+        # Score the derived spread and total markets too — they are the point of
+        # the joint model, and a good mean with bad cover probabilities is a
+        # model that still cannot price a spread.
+        for line in (-3.0, -7.0, 0.0, 3.0):
+            key = _line_key(line)
+            col = f"home_cover_{key}"
+            if col not in joined.columns:
+                continue
+            sub = joined.dropna(subset=["home_margin", col])
+            live = sub[sub["home_margin"] != -line]  # exclude pushes
+            if len(live) < 50:
+                continue
+            actual = (live["home_margin"] > -line).astype(float)
+            rows.append(M.classification_report(actual, live[col], label=f"spread{line:+g}"))
+        return rows
+
+    def calibration(self, joined: pd.DataFrame) -> pd.DataFrame:
+        sub = joined.dropna(subset=["home_win", "home_win_prob"])
+        if sub.empty:
+            return pd.DataFrame()
+        table = M.calibration_table(sub["home_win"], sub["home_win_prob"])
+        table.insert(0, "target", "home_win")
+        return table
+
+
+def _line_key(line: float) -> str:
+    return f"{line:+g}".replace(".", "_").replace("-", "m").replace("+", "p")

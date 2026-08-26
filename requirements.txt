@@ -11,5 +11,8 @@ scikit-learn>=1.3         # logistic regression, ridge, gradient boosting, calib
 pyarrow>=14.0             # parquet IO for the clean/feature layers
 joblib>=1.3               # model persistence
 
+# --- local web app (the double-click launcher) ---
+flask>=3.0                # serves the local UI on 127.0.0.1
+
 # --- dev ---
 pytest>=7.4               # test suite (leakage guards, model sanity)

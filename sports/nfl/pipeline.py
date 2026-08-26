@@ -16,6 +16,7 @@ from sports.nfl import clean as nfl_clean
 from sports.nfl import features as nfl_features
 from sports.nfl import ingest as nfl_ingest
 from sports.nfl import models as nfl_models
+from sports.nfl.models import JointGameModel
 
 log = logging.getLogger(__name__)
 
@@ -82,10 +83,22 @@ class NFLPipeline(SportPipeline):
     # --- models -------------------------------------------------------------
 
     def game_model(self) -> MarketModel:
+        """One joint model for all three game markets.
+
+        Fitting moneyline, spread and total as three independent models let them
+        contradict each other -- the old bundle quoted a 0.679 moneyline beside a
+        0.662 P(margin > 0) for the same game. Here every market is read off a
+        fitted margin and total distribution, so they agree by construction, and
+        the lattice shape gives real push probabilities on whole-number lines
+        (a Normal prices a -3 push at zero; it is really about 7%).
+
+        `nfl_models.game_targets()` still exists and still works with
+        `TabularBundle` if you want the independent-model behaviour back for a
+        comparison run.
+        """
         features = self.build_game_features()
-        return TabularBundle(
-            specs=nfl_models.game_targets(),
-            feature_cols=nfl_features.game_feature_columns(features),
+        return JointGameModel(
+            nfl_features.game_feature_columns(features),
             recency_halflife_seasons=RECENCY_HALFLIFE_SEASONS,
         )
 
@@ -114,7 +127,9 @@ class NFLPipeline(SportPipeline):
             ]
         prediction = [
             c for c in scored.columns
-            if c.endswith(("_prob", "_mean", "_sd", "_p10", "_p90")) or "_p_over_" in c
+            if c.endswith(("_prob", "_mean", "_sd", "_p10", "_p50", "_p90"))
+            or "_p_over_" in c
+            or c.startswith(("home_cover_", "home_push_", "total_over_", "total_push_", "exp_"))
         ]
         cols = [c for c in [*identity, *prediction] if c in scored.columns]
         out = scored[cols].copy()

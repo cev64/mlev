@@ -80,6 +80,12 @@ class DixonColesMarketModel(MarketModel):
         self.model = DixonColesModel(
             decay=decay, xg_weight=xg_weight, use_xg=self.use_xg
         ).fit(played)
+        log.info(
+            "fitted Dixon-Coles on %s matches, %s clubs: home advantage %.3f, "
+            "rho %.3f, decay %.4f, xG blend %.2f",
+            len(played), len(self.model.teams_), self.model.home_advantage_,
+            self.model.rho_, decay, xg_weight,
+        )
         return self
 
     def _tune(self, played: pd.DataFrame) -> tuple[float, float] | None:
@@ -92,24 +98,31 @@ class DixonColesMarketModel(MarketModel):
         if len(inner_train) < 200 or inner_valid.empty:
             return None
 
+        truth = inner_valid["outcome"].map(
+            {lab: i for i, lab in enumerate(OUTCOME_LABELS)}
+        ).to_numpy()
+        weights = XG_WEIGHT_GRID if self.use_xg else (0.0,)
+
         best, best_loss = None, np.inf
         for decay in DECAY_GRID:
-            for xg_weight in (XG_WEIGHT_GRID if self.use_xg else (0.0,)):
-                try:
-                    candidate = DixonColesModel(
-                        decay=decay, xg_weight=xg_weight, use_xg=self.use_xg
-                    ).fit(inner_train)
-                except ValueError:
-                    continue
+            # One fit per decay, not one per (decay, weight) pair. The blend
+            # weight only mixes two already-fitted sets of ratings, so refitting
+            # for each weight repeats the expensive maximum-likelihood step for
+            # nothing -- it was three times the work for identical answers.
+            try:
+                candidate = DixonColesModel(
+                    decay=decay, xg_weight=weights[0], use_xg=self.use_xg
+                ).fit(inner_train)
+            except ValueError:
+                continue
+            for xg_weight in weights:
+                candidate.xg_weight = xg_weight
                 probs = np.array(
                     [
                         candidate.scoreline(h, a).outcome_probs().probs
                         for h, a in zip(inner_valid["home_team"], inner_valid["away_team"])
                     ]
                 )
-                truth = inner_valid["outcome"].map(
-                    {lab: i for i, lab in enumerate(OUTCOME_LABELS)}
-                ).to_numpy()
                 loss = M.multiclass_log_loss(truth, probs)
                 if loss < best_loss:
                     best, best_loss = (decay, xg_weight), loss

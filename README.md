@@ -5,6 +5,10 @@ and player props, validated by walk-forward backtesting on historical seasons.
 
 Every prediction is a probability or a full distribution, never a point pick.
 
+**On a Mac, double-click `Start mlev.command`.** It sets everything up and opens
+a local web app — see [GETTING_STARTED.md](GETTING_STARTED.md) for the
+click-by-click version. The rest of this file is the technical detail.
+
 > **Market data and EV are deliberately out of scope right now.** Nothing here
 > reads a sportsbook line or computes expected value. The question this repo
 > answers is the one that has to come first: *are the models themselves
@@ -35,15 +39,28 @@ data/<sport>/         raw / clean / features / models / predictions
 tests/                leakage guards, distribution algebra, model behaviour
 ```
 
+```
+app/                  the local web UI (Flask + one HTML page)
+  server.py           JSON API over the same pipeline the scripts use
+  jobs.py             background job runner — a backfill outlives a HTTP request
+  static/             the page itself
+Start mlev.command    double-click launcher for macOS
+```
+
 Entrypoints:
 
 | Script | What it does |
 |---|---|
+| `Start mlev.command` | **double-click on a Mac** — sets up, launches the web app |
 | `run_backfill.py` | pull raw data, rebuild clean + feature layers |
 | `run_backtest.py` | walk-forward evaluation |
 | `run_scoring.py` | score the upcoming week / matchday |
 | `fetch_game_data.py` | single-purpose nflverse pull (kept from the original scaffold) |
 | `fetch_odds_data.py` | odds snapshots — standalone, not wired into the pipeline |
+
+The web app is a thin layer over exactly the same pipeline code. It has no
+model logic of its own, so anything you can do in the UI you can do from the
+command line and vice versa.
 
 ## Install
 
@@ -193,13 +210,22 @@ here by design — no market data is wired in.
 
 | Target | Metric | Model | Baseline |
 |---|---|---|---|
-| Home win | Brier | **0.2240** | 0.2486 (base rate) |
-| Home win | Log loss | **0.6388** | — |
-| Home win | Accuracy | **63.8%** | 55.0% (always home) |
-| Home win | Calibration error (ECE) | **0.027** | — |
-| Home margin | MAE / RMSE | **10.18** / 13.16 | — |
-| Home margin | Bias | +0.11 | — |
-| Total points | MAE / RMSE | **10.64** / 13.38 | — |
+| Home win | Brier | **0.2225** | 0.2486 (base rate) |
+| Home win | Log loss | **0.6360** | — |
+| Home win | Accuracy | **64.2%** | 55.0% (always home) |
+| Home win | Calibration error (ECE) | **0.032** | — |
+| Home margin | MAE / RMSE | **10.16** / 13.12 | — |
+| Home margin | Bias | +0.03 | — |
+| Total points | MAE / RMSE | **10.65** / 13.39 | — |
+
+Derived spread markets, from the same margin distribution:
+
+| Line | n | Brier | Base rate | Accuracy |
+|---|---|---|---|---|
+| Home −3 | 1,818 | **0.2154** | 0.2470 | 65.9% |
+| Home −7 | 1,880 | **0.1895** | 0.2135 | 71.8% |
+| Pick'em | 1,954 | **0.2223** | 0.2486 | 63.8% |
+| Home +3 | 1,817 | **0.2119** | 0.2332 | 66.7% |
 
 Every test season beats the base-rate Brier. Margin MAE around 10.2 points is in
 the range a sharp market achieves, which is the sanity check that matters: a
@@ -257,10 +283,27 @@ Anytime-scorer ECE 0.016; carded ECE 0.002.
 ## Models
 
 ### NFL
-- **Game lines**: regularised logistic regression for win probability; ridge
-  regression with a *fitted, feature-dependent* standard deviation for margin
-  and total. The spread is the point — a margin of +3 tells you nothing about a
-  spread market without knowing whether the sd is 9 or 14.
+- **Game lines**: one `JointGameModel`. A margin model and a total model are
+  fitted (ridge, with a *feature-dependent* standard deviation), and every
+  market is read off them — moneyline is `P(margin > 0)`, each spread is
+  `P(margin > line)` plus its push, each total the same. Fitting the three
+  markets independently let them contradict each other: the previous version
+  quoted a 0.679 moneyline beside a 0.662 `P(margin > 0)` for the same game.
+
+  The predictive distribution is a **`LatticeDistribution`, not a Normal**, and
+  that is what makes the push probabilities real. NFL margins are not smooth:
+  14.7% of games are decided by exactly 3 points and 8.5% by exactly 7, because
+  scores are built out of 3s and 7s. A Normal puts about 3% on each and *zero*
+  on any exact value, so it cannot price a −3 line at all, where the push is the
+  single biggest term. A `LatticeShape` learned from the training fold separates
+  the two things a Normal conflates — where the mass sits (the regression's job,
+  and it moves every game) from which values are intrinsically common (a
+  property of football scoring, which barely moves). Measured against a Normal
+  on the same fitted means, it halves calibration error on a −7 line
+  (0.021 vs 0.044), and prices ties at 0.35% instead of 3%.
+
+  `nfl_models.game_targets()` still exists and still works with `TabularBundle`
+  if you want the three-independent-models behaviour back for a comparison run.
 - **Player props**: Gaussian regression for yardage, Negative Binomial for
   receptions (reception counts are reliably overdispersed relative to Poisson),
   Poisson for touchdowns — so `prob_at_least(1)` gives the anytime-TD
@@ -302,6 +345,13 @@ Two things worth knowing about the implementation:
 
 ## Known limitations
 
+- **Opponent adjustment is only partial.** Elo ratings (`core/elo.py`) carry
+  most of it — a rolling EPA average cannot tell good numbers against a weak
+  schedule from the same numbers against a hard one, and every Elo update is
+  scaled by who the opponent was. Adding Elo improved Brier (0.2230 → 0.2225),
+  accuracy (63.7% → 64.2%) and margin MAE (10.18 → 10.16), though home-win
+  calibration error ticked up slightly (0.026 → 0.032). The rolling EPA and
+  points features around it are still schedule-blind.
 - **League drift.** NFL passing yards per quarterback game fell from ~245 (2016)
   to ~201 (2025), so a model trained on older seasons over-predicts. Training
   rows are down-weighted by `0.5 ** (seasons_ago / 4)`; four seasons is roughly
@@ -333,13 +383,16 @@ Two things worth knowing about the implementation:
 - **Newly promoted EPL clubs have no rating** and are predicted from a
   replacement-level prior (the weakest quartile of known clubs). Affected rows
   are flagged with `uses_replacement_rating` in the prediction output.
-- **Over/under and BTTS do not beat the base rate** — see the results table.
-- **The NFL game-line markets are three separate models**, so they can disagree
-  slightly with each other: `home_win_prob` and `P(margin > 0)` come out around
-  0.68 and 0.66 on the same game. The EPL side does not have this problem
-  because every market is derived from one scoreline distribution. Deriving the
-  NFL markets from a joint points distribution would fix it, and is the obvious
-  next improvement.
+- **Over/under and BTTS do not beat the base rate**, and this is not a fixable
+  modelling gap — the signal is not there. The best pregame feature (combined
+  rolling xG form) correlates **0.13** with total goals, about 1.7% of the
+  variance. Predicting a flat constant scores MAE 1.307 against the model's
+  1.311, so the model is fractionally *worse* than a constant on totals. The
+  1X2 market is where the EPL model actually earns its keep.
+- **NFL team scores are point estimates only.** `exp_home_score` and
+  `exp_away_score` come from the expected margin and total; there is no joint
+  distribution over the two scores, so team-total markets are not priced. The
+  margin and total distributions themselves are full distributions.
 
 ## Failure behaviour
 
@@ -359,6 +412,8 @@ information backwards from the test fold.
 python -m pytest tests/ -q
 ```
 
-47 tests. The leakage guards in `tests/test_point_in_time.py` are the important
-ones — everything else measures how good the models are; those check that the
-measurement is honest.
+63 tests. The leakage guards in `tests/test_point_in_time.py` and
+`tests/test_elo.py` are the important ones — everything else measures how good
+the models are; those check that the measurement is honest. Elo in particular is
+the easiest feature here to leak with, because the natural way to write it uses
+the result of the game being predicted.

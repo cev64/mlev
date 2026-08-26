@@ -157,7 +157,7 @@ class DixonColesModel:
         self.replacement_defence_ = float(np.quantile(defences, 0.75))
 
         self._fitted = True
-        log.info(
+        log.debug(
             "Dixon-Coles: %s clubs, %s matches, home advantage %.3f, rho %.3f",
             len(self.teams_), len(played), self.home_advantage_, self.rho_,
         )

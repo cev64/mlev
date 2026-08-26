@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlev — NFL &amp; Premier League models</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a78d6'/%3E%3Cpath d='M7 22V10h4l5 8 5-8h4v12h-4v-6l-3 5h-4l-3-5v6z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>mlev</h1>
+    <small>NFL &amp; Premier League prediction models</small>
+  </div>
+  <div class="spacer"></div>
+  <div class="sportswitch" role="tablist" aria-label="Sport">
+    <button role="tab" data-sport="nfl" aria-selected="true">NFL</button>
+    <button role="tab" data-sport="epl" aria-selected="false">Premier League</button>
+  </div>
+  <button class="action" id="themeToggle" title="Switch light / dark">◐</button>
+</header>
+
+<main>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="data" aria-selected="true">1 · Data</button>
+    <button role="tab" data-tab="backtest" aria-selected="false">2 · Backtest</button>
+    <button role="tab" data-tab="predict" aria-selected="false">3 · Predict</button>
+  </nav>
+
+  <!-- ================= DATA ================= -->
+  <section data-panel="data">
+    <div class="card">
+      <h2>Get the data</h2>
+      <p class="sub">
+        Downloads every season the models train on, cleans it, joins the sources, and
+        builds the point-in-time features. Do this once; afterwards it only fetches
+        what is new.
+      </p>
+      <div class="note" id="dataIntro"></div>
+      <div class="row">
+        <button class="action primary" id="btnBackfill">Download &amp; prepare data</button>
+        <label class="field" id="playersField" hidden>
+          <span>&nbsp;</span>
+          <span class="row" style="gap:6px">
+            <input type="checkbox" id="withPlayers">
+            <span>also fetch player-level data (slow — one request per match)</span>
+          </span>
+        </label>
+        <label class="field">
+          <span>&nbsp;</span>
+          <span class="row" style="gap:6px">
+            <input type="checkbox" id="forceRefetch">
+            <span>re-download even if cached</span>
+          </span>
+        </label>
+      </div>
+      <div id="backfillJob"></div>
+    </div>
+
+    <div class="grid two">
+      <div class="card">
+        <h3>Raw downloads</h3>
+        <ul class="filelist" id="rawList"></ul>
+      </div>
+      <div class="card">
+        <h3>Cleaned &amp; features</h3>
+        <ul class="filelist" id="cleanList"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= BACKTEST ================= -->
+  <section data-panel="backtest" hidden>
+    <div class="card">
+      <h2>Does the model actually work?</h2>
+      <p class="sub">
+        Walk-forward validation: train on every season before season N, predict season N,
+        roll forward. Nothing the model sees during training comes from the season it is
+        being scored on, so these numbers are what it would really have done.
+      </p>
+      <div class="row">
+        <label class="field">Market
+          <select id="btLevel">
+            <option value="game">Game lines</option>
+            <option value="player">Player props</option>
+          </select>
+        </label>
+        <button class="action primary" id="btnBacktest">Run backtest</button>
+        <span class="pill" id="btFreshness"></span>
+      </div>
+      <div id="backtestJob"></div>
+    </div>
+
+    <div id="backtestResults"></div>
+  </section>
+
+  <!-- ================= PREDICT ================= -->
+  <section data-panel="predict" hidden>
+    <div class="card">
+      <h2>Predict upcoming fixtures</h2>
+      <p class="sub">
+        Trains on everything played so far, then predicts what has not been played yet.
+        Every number is a probability or a distribution — never a single pick.
+      </p>
+      <div class="row">
+        <label class="field">Market
+          <select id="scLevel">
+            <option value="game">Game lines</option>
+            <option value="player">Player props</option>
+          </select>
+        </label>
+        <label class="field" id="seasonField">Season
+          <input type="number" id="scSeason" style="width:100px" placeholder="auto">
+        </label>
+        <label class="field" id="weekField">Week
+          <input type="number" id="scWeek" style="width:90px" placeholder="next">
+        </label>
+        <button class="action primary" id="btnScore">Predict</button>
+      </div>
+
+      <div id="eplFixtures" hidden>
+        <div class="note" id="fixtureNote"></div>
+        <label class="field">Fixtures — one per line, <code>DD/MM/YYYY, Home, Away</code>
+          <textarea id="fixtureText" spellcheck="false"></textarea>
+        </label>
+      </div>
+      <div id="scoreJob"></div>
+    </div>
+
+    <div class="card" id="savedPredictions">
+      <h3>Saved prediction files</h3>
+      <ul class="filelist" id="predList"></ul>
+    </div>
+
+    <div id="predictionResults"></div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
