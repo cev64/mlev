@@ -20,6 +20,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from app.jobs import RUNNER
 from core.config import SPORTS, get_sport
 from core.errors import MlevError
+from core.odds import american_to_decimal, compare
 from core.registry import get_pipeline
 
 log = logging.getLogger(__name__)
@@ -336,8 +337,19 @@ def _epl_upcoming(pipeline, features: pd.DataFrame, body: dict, job) -> pd.DataF
             "away_team": normalize_series(raw["AwayTeam"], CLUB_ALIAS_MAP),
             "kickoff": kickoff,
             "season": season,
-            "match_id": season.__str__() + "_" + kickoff.dt.strftime("%Y%m%d") + "_upcoming",
         }
+    )
+    # The teams have to be in the id. Keying on season and date alone gave every
+    # match in a matchday the same id, and anything downstream that groups by it
+    # — the Edge tab's saved prices, for one — silently merged them.
+    fixtures["match_id"] = (
+        fixtures["season"].astype(str)
+        + "_"
+        + fixtures["kickoff"].dt.strftime("%Y%m%d")
+        + "_"
+        + fixtures["home_team"].str.replace(" ", "-", regex=False)
+        + "_"
+        + fixtures["away_team"].str.replace(" ", "-", regex=False)
     )
     for col in pipeline.outcome_columns("game"):
         fixtures[col] = float("nan")
@@ -370,6 +382,70 @@ def read_predictions(sport: str, name: str):
     return jsonify(frame_to_json(pd.read_csv(path), limit=400))
 
 
+@app.get("/api/markets/<sport>/<name>")
+def read_markets(sport: str, name: str):
+    """Every bettable side of every market in a saved prediction file.
+
+    This is the phone view's data source: one entry per fixture, each carrying
+    both sides of the moneyline, every spread and every total, with the fair
+    price the model implies.
+    """
+    config = get_sport(sport)
+    path = (config.path("predictions") / name).resolve()
+    if not path.is_relative_to(config.path("predictions").resolve()) or not path.exists():
+        return jsonify({"error": "no such prediction file"}), 404
+    if not name.startswith("game"):
+        return jsonify({"error": "market view is only available for game-level predictions"}), 400
+
+    pipeline = get_pipeline(sport)
+    frame = pd.read_csv(path)
+    fixtures = [f.to_dict() for f in pipeline.fixture_markets(frame)]
+    return jsonify({"file": name, "sport": sport, "fixtures": fixtures})
+
+
+@app.post("/api/ev")
+def expected_value_endpoint():
+    """Compare one or many posted prices against the model's probabilities.
+
+    Body: {"bets": [{"probability": .., "push_probability": .., "odds": -110,
+                     "format": "american"|"decimal", "opposing_odds": ..}]}
+
+    Nothing is fetched from a book here — you bring the price. The response adds
+    the de-vigged comparison whenever the other side of the market is supplied,
+    because that is the only version that strips the house margin out of what
+    you are measuring against.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    bets = body.get("bets") or []
+    if not isinstance(bets, list) or not bets:
+        return jsonify({"error": "send a non-empty 'bets' list"}), 400
+    if len(bets) > 500:
+        return jsonify({"error": "at most 500 bets per request"}), 400
+
+    results = []
+    for index, bet in enumerate(bets):
+        try:
+            odds = bet.get("odds")
+            if odds in (None, ""):
+                results.append({"index": index, "error": "no price given"})
+                continue
+            comparison = compare(
+                float(bet["probability"]),
+                float(odds),
+                american=str(bet.get("format", "american")).lower() != "decimal",
+                opposing_odds=(
+                    float(bet["opposing_odds"])
+                    if bet.get("opposing_odds") not in (None, "")
+                    else None
+                ),
+                push_probability=float(bet.get("push_probability") or 0.0),
+            )
+            results.append({"index": index, **comparison.summary()})
+        except (ValueError, TypeError, KeyError) as exc:
+            results.append({"index": index, "error": str(exc)})
+    return jsonify({"results": results})
+
+
 @app.get("/api/fixtures/epl")
 def epl_fixtures():
     """The live football-data fixture feed, for pre-filling the EPL form."""
@@ -386,15 +462,81 @@ def epl_fixtures():
     return jsonify({"fixtures": rows, "note": "" if rows else "The feed lists no Premier League matches right now — it only covers the next few days."})
 
 
-def serve(host: str = "127.0.0.1", port: int = 8733, open_browser: bool = True) -> None:
+def local_ip() -> str | None:
+    """This machine's address on the LAN, for connecting a phone.
+
+    Opening a UDP socket to a public address does not send anything; it just
+    makes the OS pick the interface it would route through, which is the one
+    the phone can reach.
+    """
+    import socket
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("8.8.8.8", 80))
+        return probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+
+
+def qr_code(text: str) -> str | None:
+    """A scannable QR for the terminal, so connecting a phone is not typing an IP.
+
+    Optional: if `qrcode` is not installed the printed URL is still there, so a
+    missing package costs a convenience and nothing else.
+    """
+    try:
+        import io
+
+        import qrcode
+
+        code = qrcode.QRCode(border=1)
+        code.add_data(text)
+        code.make(fit=True)
+        buffer = io.StringIO()
+        code.print_ascii(out=buffer, invert=True)
+        return buffer.getvalue()
+    except Exception:
+        return None
+
+
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8733,
+    open_browser: bool = True,
+    lan: bool = False,
+) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    url = f"http://{host}:{port}"
+    # Binding 0.0.0.0 exposes the app to everything on the network, so it is
+    # opt-in rather than the default.
+    bind = "0.0.0.0" if lan else host
+    url = f"http://127.0.0.1:{port}"
+
     if open_browser:
         import threading
 
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    print(f"\n  mlev is running at {url}\n  Press Ctrl+C to stop.\n")
-    app.run(host=host, port=port, debug=False, threaded=True)
+
+    print(f"\n  mlev is running at {url}")
+    if lan:
+        address = local_ip()
+        if address:
+            phone_url = f"http://{address}:{port}"
+            print(f"\n  On your phone, on the same Wi-Fi, open:\n      {phone_url}\n")
+            code = qr_code(phone_url)
+            if code:
+                print(code)
+            print(
+                "  Anyone on this network can reach it while it is running.\n"
+                "  Close this window when you are done."
+            )
+        else:
+            print("\n  Could not work out this machine's network address.")
+            print("  Find it in System Settings > Network and use http://<that>:%s" % port)
+    print("\n  Press Ctrl+C to stop.\n")
+    app.run(host=bind, port=port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

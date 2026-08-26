@@ -17,6 +17,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.backtest import MarketModel, WalkForwardResult, walk_forward
+from core.markets import FixtureMarkets
 from core.config import SportConfig, ensure_layers
 from core.errors import MissingDataError
 
@@ -122,3 +123,12 @@ class SportPipeline(ABC):
     @abstractmethod
     def prediction_view(self, scored: pd.DataFrame, level: str) -> pd.DataFrame:
         """Trim a scored frame to the human-readable columns worth writing out."""
+
+    @abstractmethod
+    def fixture_markets(self, scored: pd.DataFrame) -> list[FixtureMarkets]:
+        """Reshape scored game-level rows into per-fixture lists of bettable sides.
+
+        Both sides of every market, each with its probability, its push
+        probability and the fair price those imply. This is what the EV
+        comparison and the phone UI consume.
+        """

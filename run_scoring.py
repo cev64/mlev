@@ -160,11 +160,15 @@ def _epl_upcoming(pipeline, features: pd.DataFrame, args) -> pd.DataFrame:
 
     season = args.season if args.season is not None else _season_of(fixtures["kickoff"].min())
     fixtures["season"] = season
+    # Season and date alone are not unique: every match in a matchday collides.
     fixtures["match_id"] = (
         fixtures["season"].astype(str)
         + "_"
         + fixtures["kickoff"].dt.strftime("%Y%m%d")
-        + "_upcoming"
+        + "_"
+        + fixtures["home_team"].str.replace(" ", "-", regex=False)
+        + "_"
+        + fixtures["away_team"].str.replace(" ", "-", regex=False)
     )
     for col in pipeline.outcome_columns("game"):
         fixtures[col] = float("nan")

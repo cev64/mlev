@@ -9,12 +9,12 @@ Every prediction is a probability or a full distribution, never a point pick.
 a local web app — see [GETTING_STARTED.md](GETTING_STARTED.md) for the
 click-by-click version. The rest of this file is the technical detail.
 
-> **Market data and EV are deliberately out of scope right now.** Nothing here
-> reads a sportsbook line or computes expected value. The question this repo
-> answers is the one that has to come first: *are the models themselves
-> accurate, and do their stated probabilities mean what they say?*
-> `fetch_odds_data.py` keeps accumulating odds snapshots for that later phase,
-> but nothing in the pipeline imports it or reads what it writes.
+> **No book integration.** Nothing here fetches odds from a sportsbook. What it
+> does give you is every side of every market as a probability with a fair price,
+> and an EV calculator you paste a price into — so you can compare against a book
+> yourself without the project taking a dependency on one.
+> `fetch_odds_data.py` still keeps accumulating odds snapshots for a future
+> automated phase, and nothing in the pipeline imports it or reads what it writes.
 
 ---
 
@@ -27,6 +27,9 @@ on which sport they are running.
 ```
 core/                 sport-agnostic machinery
   config.py           paths + per-sport config (the SPORTS registry)
+  odds.py             odds conversion, de-vigging, EV, Kelly
+  markets.py          one fixture -> every bettable side, with fair prices
+  elo.py              opponent-adjusted team ratings
   features.py         point-in-time rolling helpers — the anti-leakage layer
   distributions.py    Normal / Poisson / NegBinom / Bernoulli / Categorical / Scoreline
   models.py           estimators that all return distributions
@@ -45,6 +48,9 @@ app/                  the local web UI (Flask + one HTML page)
   jobs.py             background job runner — a backfill outlives a HTTP request
   static/             the page itself
 Start mlev.command    double-click launcher for macOS
+Start mlev (phone).command   ...and one that also serves your local network
+android/              the Android app (WebView client) + its build script
+  mlev.apk            prebuilt, debug-signed, ready to sideload
 ```
 
 Entrypoints:
@@ -52,6 +58,8 @@ Entrypoints:
 | Script | What it does |
 |---|---|
 | `Start mlev.command` | **double-click on a Mac** — sets up, launches the web app |
+| `Start mlev (phone).command` | the same, also reachable from your phone |
+| `android/build-apk.sh` | rebuild the Android app (needs the Android SDK) |
 | `run_backfill.py` | pull raw data, rebuild clean + feature layers |
 | `run_backtest.py` | walk-forward evaluation |
 | `run_scoring.py` | score the upcoming week / matchday |
@@ -280,6 +288,29 @@ Anytime-scorer ECE 0.016; carded ECE 0.002.
 
 ---
 
+## Expected value
+
+`core/odds.py` and `core/markets.py` turn the model's probabilities into
+something comparable to a posted price. Two traps this is built around:
+
+1. **A book's prices do not sum to 100%.** The excess is its margin, so comparing
+   your 55% against an implied 55% is comparing against a number that already has
+   the house edge in it. `remove_vig` strips it. (The proportional method is used;
+   it slightly over-taxes longshots, which is still far closer than not
+   de-vigging.)
+2. **A push is not a loss.** An NFL −3 spread lands on exactly 3 about 15% of the
+   time and returns the stake. On a −110 price, treating those as losses reports
+   −$12.18 per $100 where the truth is −$4.18. So `MarketSide` carries a push
+   probability, and the number compared against the book is P(win | the bet
+   resolves), not the raw win probability.
+
+Every market emits **both sides**, and they are guaranteed to be complements —
+the away price is one minus the home price and the push, not a separately fitted
+number that can drift out of agreement.
+
+`POST /api/ev` does the arithmetic server-side; the browser has a small mirror of
+it so the calculator still works when the Mac is asleep.
+
 ## Models
 
 ### NFL
@@ -412,7 +443,7 @@ information backwards from the test fold.
 python -m pytest tests/ -q
 ```
 
-63 tests. The leakage guards in `tests/test_point_in_time.py` and
+101 tests. The leakage guards in `tests/test_point_in_time.py` and
 `tests/test_elo.py` are the important ones — everything else measures how good
 the models are; those check that the measurement is honest. Elo in particular is
 the easiest feature here to leak with, because the natural way to write it uses

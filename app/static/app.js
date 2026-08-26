@@ -51,6 +51,7 @@ $$('.sportswitch button').forEach(btn => btn.addEventListener('click', () => {
   $$('.sportswitch button').forEach(b => b.setAttribute('aria-selected', String(b === btn)));
   render();
   loadBacktest();
+  if (state.tab === 'edge') loadEdge();
 }));
 
 $$('nav.tabs button').forEach(btn => btn.addEventListener('click', () => {
@@ -59,6 +60,7 @@ $$('nav.tabs button').forEach(btn => btn.addEventListener('click', () => {
   $$('section[data-panel]').forEach(s => { s.hidden = s.dataset.panel !== state.tab; });
   if (state.tab === 'backtest') loadBacktest();
   if (state.tab === 'predict') loadFixtureHelp();
+  if (state.tab === 'edge') loadEdge();
 }));
 
 /* ---------------- status ---------------- */
@@ -467,6 +469,299 @@ function renderPredictionTable(data) {
   return `<div class="tablewrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
+/* ---------------- offline ---------------- */
+/* The markets payload is cached in localStorage as well as (where it runs) the
+   service worker. localStorage works in a plain WebView over http, which the
+   service worker does not, so this is what actually keeps the numbers readable
+   on a phone when the Mac is asleep. */
+function cacheMarkets(sport, payload) {
+  try {
+    localStorage.setItem(`mlev-markets-${sport}`,
+      JSON.stringify({ saved: Date.now(), payload }));
+  } catch { /* quota or private mode */ }
+}
+
+function cachedMarkets(sport) {
+  try {
+    const raw = localStorage.getItem(`mlev-markets-${sport}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function offlineBanner(saved) {
+  const age = Math.round((Date.now() - saved) / 60000);
+  const when = age < 60 ? `${age} min ago`
+    : age < 1440 ? `${Math.round(age / 60)} h ago`
+    : `${Math.round(age / 1440)} days ago`;
+  return `<div class="note warn"><strong>Offline — showing the last numbers you
+    loaded (${when}).</strong> Start mlev on your computer and pull down to refresh
+    for current fixtures.</div>`;
+}
+
 /* ---------------- boot ---------------- */
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('/static/sw.js').catch(() => { /* not fatal */ });
+}
+
+/* Deep links from the app icon's shortcuts: /?tab=edge */
+const requestedTab = new URLSearchParams(location.search).get('tab');
+if (requestedTab && $(`nav.tabs button[data-tab="${requestedTab}"]`)) {
+  $(`nav.tabs button[data-tab="${requestedTab}"]`).click();
+}
+
 refreshStatus();
 setInterval(() => { if (!Object.keys(state.polls).length) refreshStatus(); }, 15000);
+
+/* =====================================================================
+   EDGE TAB — every side as a percentage, and what a book's price is worth.
+   ===================================================================== */
+
+const edge = {
+  fixtures: [],
+  file: null,
+  /* Prices the user has typed, keyed "fixtureId|market|side". Kept in
+     localStorage so a half-finished shopping session survives a reload or the
+     phone locking. */
+  prices: loadPrices(),
+  results: {},
+};
+
+function loadPrices() {
+  try { return JSON.parse(localStorage.getItem('mlev-prices') || '{}'); }
+  catch { return {}; }
+}
+function savePrices() {
+  try { localStorage.setItem('mlev-prices', JSON.stringify(edge.prices)); }
+  catch { /* private mode — the session still works, it just won't persist */ }
+}
+
+const priceKey = (fixtureId, side) => `${fixtureId}|${side.market}|${side.side}`;
+
+async function loadEdge() {
+  const st = sportStatus();
+  if (!st) return;
+  const games = st.predictions.filter(p => p.level === 'game');
+  const select = $('#edgeFile');
+
+  if (!games.length) {
+    select.innerHTML = '';
+    $('#edgeList').innerHTML =
+      `<div class="card"><p class="empty">No predictions saved yet for
+       ${st.label}. Run one on the Predict tab first.</p></div>`;
+    return;
+  }
+
+  const previous = select.value;
+  select.innerHTML = games.map(p =>
+    `<option value="${p.name}">${p.updated}</option>`).join('');
+  select.value = games.some(p => p.name === previous) ? previous : games[0].name;
+
+  try {
+    const data = await api(`/api/markets/${state.sport}/${select.value}`);
+    edge.file = data.file;
+    edge.fixtures = data.fixtures;
+    edge.offline = null;
+    cacheMarkets(state.sport, data);
+    renderEdge();
+    recomputeAll();
+  } catch (err) {
+    const cached = cachedMarkets(state.sport);
+    if (cached) {
+      edge.file = cached.payload.file;
+      edge.fixtures = cached.payload.fixtures;
+      edge.offline = cached.saved;
+      renderEdge();
+    } else {
+      $('#edgeList').innerHTML = `<div class="note err">${escapeHtml(err.message)}</div>`;
+    }
+  }
+}
+
+$('#edgeFile').addEventListener('change', loadEdge);
+$('#oddsFormat').addEventListener('change', recomputeAll);
+$('#edgeStake').addEventListener('change', recomputeAll);
+$('#edgeFilter').addEventListener('change', renderEdge);
+
+function renderEdge() {
+  const filter = $('#edgeFilter').value;
+  if (!edge.fixtures.length) return;
+
+  const cards = edge.fixtures.map(fixture => {
+    const groups = new Map();
+    for (const side of fixture.sides) {
+      if (!groups.has(side.market)) groups.set(side.market, []);
+      groups.get(side.market).push(side);
+    }
+
+    const blocks = [...groups.entries()].map(([market, sides]) => {
+      const rows = sides.map(side => sideRow(fixture, side)).filter(Boolean);
+      if (!rows.length) return '';
+      return `<div class="marketblock">
+          <div class="marketname">${market}
+            ${sides[0].push_probability > 0.001
+              ? `<span class="pushnote">push ${(sides[0].push_probability * 100).toFixed(1)}%</span>`
+              : ''}
+          </div>
+          ${rows.join('')}
+        </div>`;
+    }).filter(Boolean);
+
+    if (!blocks.length) return '';
+
+    const context = Object.entries(fixture.context)
+      .map(([k, v]) => `<div class="ctxline"><span>${k}</span><b>${escapeHtml(v)}</b></div>`)
+      .join('');
+
+    return `<details class="card fixture" open data-fixture="${fixture.fixture_id}">
+        <summary>
+          <span class="fixname">${escapeHtml(fixture.label)}</span>
+          <span class="fixdate">${fixture.kickoff}</span>
+        </summary>
+        ${context ? `<div class="ctx">${context}</div>` : ''}
+        ${blocks.join('')}
+      </details>`;
+  }).filter(Boolean);
+
+  $('#edgeList').innerHTML =
+    (edge.offline ? offlineBanner(edge.offline) : '')
+    + (cards.join('') ||
+       '<div class="card"><p class="empty">Nothing matches that filter.</p></div>');
+
+  $$('#edgeList input.oddsinput').forEach(input => {
+    input.addEventListener('input', onPriceTyped);
+    input.addEventListener('focus', () => input.select());
+  });
+
+  function sideRow(fixture, side) {
+    const key = priceKey(fixture.fixture_id, side);
+    const typed = edge.prices[key] || '';
+    const result = edge.results[key];
+
+    if (filter === 'priced' && !typed) return '';
+    if (filter === 'positive' && !(result && result.ev_per_100 > 0)) return '';
+
+    const verdict = result
+      ? `<span class="verdict ${result.ev_per_100 > 0 ? 'good' : 'bad'}">
+           ${result.ev_per_100 > 0 ? '+' : ''}${result.ev_per_100.toFixed(2)}
+         </span>`
+      : '<span class="verdict idle">—</span>';
+
+    const detail = result ? `
+      <div class="evdetail">
+        <span>edge <b class="${result.edge > 0 ? 'good' : 'bad'}">${(result.edge * 100).toFixed(1)}%</b></span>
+        ${result.no_vig_edge !== undefined
+          ? `<span>no-vig <b class="${result.no_vig_edge > 0 ? 'good' : 'bad'}">${(result.no_vig_edge * 100).toFixed(1)}%</b></span>`
+          : ''}
+        <span>EV <b class="${result.ev_pct > 0 ? 'good' : 'bad'}">${(result.ev_pct * 100).toFixed(1)}%</b></span>
+        ${result.kelly > 0 ? `<span>Kelly <b>${(result.kelly * 100).toFixed(1)}%</b></span>` : ''}
+      </div>` : '';
+
+    return `<div class="sideRow" data-key="${escapeHtml(key)}">
+        <div class="sidename">${escapeHtml(side.side)}</div>
+        <div class="sidepct">
+          <span class="track"><span class="fill" style="width:${(side.probability * 100).toFixed(1)}%"></span></span>
+          <b>${(side.probability * 100).toFixed(1)}%</b>
+        </div>
+        <div class="sidefair" title="fair price with no margin">${side.fair_american}</div>
+        <input class="oddsinput" inputmode="numeric" enterkeyhint="done"
+               placeholder="price" value="${escapeHtml(typed)}"
+               data-key="${escapeHtml(key)}"
+               data-p="${side.probability}" data-push="${side.push_probability}">
+        ${verdict}
+        ${detail}
+      </div>`;
+  }
+}
+
+let priceTimer = null;
+function onPriceTyped(event) {
+  const input = event.target;
+  const key = input.dataset.key;
+  const value = input.value.trim();
+  if (value) edge.prices[key] = value; else delete edge.prices[key];
+  savePrices();
+  clearTimeout(priceTimer);
+  priceTimer = setTimeout(recomputeAll, 260);
+}
+
+/* One request for every priced side. The opposing price is filled in
+   automatically when you have typed both sides of a market, which is what
+   makes the de-vigged number available. */
+async function recomputeAll() {
+  const inputs = $$('#edgeList input.oddsinput');
+  const bets = [];
+  const keys = [];
+
+  for (const input of inputs) {
+    const raw = (edge.prices[input.dataset.key] || '').trim();
+    if (!raw) continue;
+    const odds = parseFloat(raw);
+    if (!Number.isFinite(odds)) continue;
+
+    const row = input.closest('.sideRow');
+    const block = row.closest('.marketblock');
+    const siblings = $$('input.oddsinput', block).filter(i => i !== input);
+    const opposingRaw = siblings.length === 1
+      ? (edge.prices[siblings[0].dataset.key] || '').trim() : '';
+    const opposing = parseFloat(opposingRaw);
+
+    keys.push(input.dataset.key);
+    bets.push({
+      probability: parseFloat(input.dataset.p),
+      push_probability: parseFloat(input.dataset.push) || 0,
+      odds,
+      format: $('#oddsFormat').value,
+      opposing_odds: Number.isFinite(opposing) ? opposing : null,
+    });
+  }
+
+  if (!bets.length) { edge.results = {}; renderEdge(); return; }
+
+  const stake = Math.max(1, parseFloat($('#edgeStake').value) || 100);
+  let results;
+  try {
+    ({ results } = await api('/api/ev', { method: 'POST', body: JSON.stringify({ bets }) }));
+  } catch {
+    // No server: do the same arithmetic here. It is not much, and losing the
+    // EV column is exactly what you do not want when you are standing in front
+    // of a betting slip.
+    results = bets.map(localCompare);
+  }
+  edge.results = {};
+  results.forEach((r, i) => {
+    if (r.error) return;
+    edge.results[keys[i]] = { ...r, ev_per_100: r.ev_pct * stake };
+  });
+  renderEdge();
+}
+
+/* Mirrors core/odds.py. Kept deliberately small — the server is the reference
+   implementation and the one under test; this is the offline fallback. */
+function localCompare(bet) {
+  const toDecimal = odds => bet.format === 'decimal'
+    ? odds
+    : (odds > 0 ? 1 + odds / 100 : 1 + 100 / Math.abs(odds));
+
+  const decimal = toDecimal(bet.odds);
+  if (!(decimal > 1)) return { error: 'bad price' };
+
+  const implied = 1 / decimal;
+  const push = bet.push_probability || 0;
+  const settles = bet.probability / (1 - push);
+  const lose = 1 - bet.probability - push;
+  const evPct = bet.probability * (decimal - 1) - lose;
+
+  const out = {
+    model_probability: bet.probability,
+    push_probability: push,
+    book_implied: implied,
+    edge: settles - implied,
+    ev_pct: evPct,
+    kelly: evPct > 0 ? Math.min(evPct / (decimal - 1), 1) : 0,
+  };
+  if (bet.opposing_odds != null && Number.isFinite(bet.opposing_odds)) {
+    const other = 1 / toDecimal(bet.opposing_odds);
+    out.no_vig_edge = settles - implied / (implied + other);
+  }
+  return out;
+}

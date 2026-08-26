@@ -2,9 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>mlev — NFL &amp; Premier League models</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a78d6'/%3E%3Cpath d='M7 22V10h4l5 8 5-8h4v12h-4v-6l-3 5h-4l-3-5v6z' fill='white'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#2a78d6">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -17,16 +23,19 @@
   <div class="spacer"></div>
   <div class="sportswitch" role="tablist" aria-label="Sport">
     <button role="tab" data-sport="nfl" aria-selected="true">NFL</button>
-    <button role="tab" data-sport="epl" aria-selected="false">Premier League</button>
+    <button role="tab" data-sport="epl" aria-selected="false">
+      <span class="wide-only">Premier League</span><span class="narrow-only">EPL</span>
+    </button>
   </div>
   <button class="action" id="themeToggle" title="Switch light / dark">◐</button>
 </header>
 
 <main>
   <nav class="tabs" role="tablist">
-    <button role="tab" data-tab="data" aria-selected="true">1 · Data</button>
-    <button role="tab" data-tab="backtest" aria-selected="false">2 · Backtest</button>
-    <button role="tab" data-tab="predict" aria-selected="false">3 · Predict</button>
+    <button role="tab" data-tab="data" aria-selected="true"><span class="wide-only">1 · </span>Data</button>
+    <button role="tab" data-tab="backtest" aria-selected="false"><span class="wide-only">2 · </span>Backtest</button>
+    <button role="tab" data-tab="predict" aria-selected="false"><span class="wide-only">3 · </span>Predict</button>
+    <button role="tab" data-tab="edge" aria-selected="false"><span class="wide-only">4 · </span>Edge</button>
   </nav>
 
   <!-- ================= DATA ================= -->
@@ -135,6 +144,72 @@
     </div>
 
     <div id="predictionResults"></div>
+  </section>
+
+  <!-- ================= EDGE ================= -->
+  <section data-panel="edge" hidden>
+    <div class="card">
+      <h2>Every side, as a percentage</h2>
+      <p class="sub">
+        Both sides of every market, with the fair price the model implies. Type a
+        book's price next to any side and you get the edge, the expected value per
+        $100, and the Kelly stake.
+      </p>
+
+      <div class="row">
+        <label class="field">Predictions
+          <select id="edgeFile"></select>
+        </label>
+        <label class="field">Odds format
+          <select id="oddsFormat">
+            <option value="american">American (−110)</option>
+            <option value="decimal">Decimal (1.91)</option>
+          </select>
+        </label>
+        <label class="field">Show
+          <select id="edgeFilter">
+            <option value="all">All markets</option>
+            <option value="priced">Only what I've priced</option>
+            <option value="positive">Only +EV</option>
+          </select>
+        </label>
+        <label class="field">Stake
+          <input type="number" id="edgeStake" value="100" min="1" step="10" style="width:96px">
+        </label>
+      </div>
+
+      <details class="help">
+        <summary>How to read this</summary>
+        <div>
+          <p><strong>Model %</strong> is the chance the model gives that side. Where a
+          push is possible the percentage shown is the chance it wins outright, and
+          the push is listed separately — a −3 spread that lands on 3 returns your
+          stake rather than losing it.</p>
+          <p><strong>Fair</strong> is the price with no margin at all: what a book
+          taking zero cut would post. Any real price will be worse than this. The
+          question is by how much.</p>
+          <p><strong>Edge</strong> compares the model against the price you typed,
+          after removing the push. Enter the other side's price too and you also get
+          the de-vigged comparison, which strips the book's margin and is the honest
+          version.</p>
+          <p><strong>EV</strong> is expected profit on your stake. It is the number
+          that decides whether a price is worth taking — a 3-point edge on a longshot
+          is worth far more than 3 points on a heavy favourite.</p>
+          <p><strong>Kelly</strong> is an upper bound on what a bankroll can justify,
+          assuming the model's probability is exactly right. It never is, so most
+          people bet a fraction of it.</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="note warn" id="edgeCaveat">
+      <strong>Before you act on any of this:</strong> check the Backtest tab. The
+      model beats the base rate on NFL moneylines and EPL match results; it does
+      <em>not</em> beat it on EPL totals or both-teams-to-score. A number being
+      shown here does not mean it is worth betting.
+    </div>
+
+    <div id="edgeList"></div>
   </section>
 </main>
 

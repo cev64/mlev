@@ -1,0 +1,23 @@
+{
+  "name": "mlev — NFL & Premier League models",
+  "short_name": "mlev",
+  "description": "Model probabilities and expected value for NFL and Premier League markets.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f4f2",
+  "theme_color": "#2a78d6",
+  "categories": ["sports", "utilities"],
+  "icons": [
+    { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Edge", "short_name": "Edge", "url": "/?tab=edge",
+      "description": "Compare model probabilities against a book's price" },
+    { "name": "Predict", "short_name": "Predict", "url": "/?tab=predict",
+      "description": "Score the upcoming week or matchday" }
+  ]
+}

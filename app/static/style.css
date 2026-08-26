@@ -87,6 +87,7 @@ header {
   background: var(--surface-1);
   border-bottom: 1px solid var(--border);
 }
+.narrow-only { display: none; }
 .brand { display: flex; align-items: baseline; gap: 10px; }
 .brand small { color: var(--text-muted); font-size: 12.5px; }
 .spacer { flex: 1; }
@@ -224,3 +225,166 @@ details.help { margin-top: 10px; font-size: 13.5px; color: var(--text-secondary)
 details.help summary { cursor: pointer; font-weight: 550; color: var(--text-primary); }
 details.help > div { padding: 10px 0 0; }
 code { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+
+/* =====================================================================
+   EDGE TAB
+   Phone-first: a market side is one row that must stay readable at 360px,
+   which is roughly a folded phone's cover screen.
+   ===================================================================== */
+details.fixture { padding: 0; overflow: hidden; }
+details.fixture > summary {
+  display: flex; align-items: baseline; gap: 10px; cursor: pointer;
+  padding: 14px 16px; list-style: none; background: var(--surface-2);
+  border-bottom: 1px solid transparent;
+}
+details.fixture[open] > summary { border-bottom-color: var(--border); }
+details.fixture > summary::-webkit-details-marker { display: none; }
+details.fixture > summary::before {
+  content: '▸'; color: var(--text-muted); font-size: 11px; transition: transform .15s;
+}
+details.fixture[open] > summary::before { transform: rotate(90deg); }
+.fixname { font-weight: 650; font-size: 15px; }
+.fixdate { color: var(--text-muted); font-size: 12.5px; margin-left: auto; }
+
+.ctx { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.ctxline { font-size: 12.5px; color: var(--text-muted); }
+.ctxline b { color: var(--text-secondary); font-weight: 600; margin-left: 5px; }
+
+.marketblock { border-bottom: 1px solid var(--border); padding: 4px 0 8px; }
+.marketblock:last-child { border-bottom: 0; }
+.marketname {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-muted); padding: 9px 16px 5px; display: flex; gap: 8px; align-items: baseline;
+}
+.pushnote {
+  font-size: 10.5px; letter-spacing: 0; text-transform: none;
+  background: var(--surface-2); border-radius: 999px; padding: 1px 7px; color: var(--text-secondary);
+}
+
+/* The row. Grid so the columns line up down the whole card. */
+.sideRow {
+  display: grid; align-items: center; gap: 8px 10px;
+  grid-template-columns: minmax(0, 1fr) 96px 52px 74px 62px;
+  grid-template-areas:
+    "name   pct    fair  input  verdict"
+    "detail detail detail detail detail";
+  padding: 7px 16px;
+}
+/* Selects must never push their card wider than the screen. */
+label.field select { max-width: 100%; }
+.sideRow:hover { background: var(--accent-soft); }
+.sidename { grid-area: name; font-size: 13.5px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; }
+.sidepct { grid-area: pct; display: flex; align-items: center; gap: 7px; }
+.sidepct .track { flex: 1; height: 6px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.sidepct .fill { display: block; height: 100%; background: var(--seq-450); border-radius: 999px; }
+.sidepct b { font-variant-numeric: tabular-nums; font-size: 12.5px; font-weight: 600; min-width: 42px; text-align: right; }
+.sidefair {
+  grid-area: fair; font-family: var(--mono); font-size: 12px;
+  color: var(--text-muted); text-align: right;
+}
+input.oddsinput {
+  grid-area: input; width: 100%; padding: 5px 7px; font-size: 13px;
+  font-family: var(--mono); text-align: center;
+}
+input.oddsinput:focus { outline: 2px solid var(--series-1); outline-offset: -1px; }
+.verdict {
+  grid-area: verdict; text-align: right; font-variant-numeric: tabular-nums;
+  font-weight: 650; font-size: 13px;
+}
+.verdict.good { color: var(--good); }
+.verdict.bad { color: var(--critical); }
+.verdict.idle { color: var(--text-muted); font-weight: 400; }
+
+.evdetail {
+  grid-area: detail; display: flex; flex-wrap: wrap; gap: 4px 14px;
+  font-size: 11.5px; color: var(--text-muted); padding-top: 2px;
+}
+.evdetail b { font-variant-numeric: tabular-nums; font-weight: 650; }
+.evdetail b.good { color: var(--good); }
+.evdetail b.bad { color: var(--critical); }
+
+/* --- narrow: folded cover screen, ~360px ------------------------------- */
+@media (max-width: 620px) {
+  main { padding: 12px; }
+  /* One line, never wrapping: a wrapped header ate a quarter of a folded
+     phone's screen before any content appeared. */
+  header { padding: 9px 12px; gap: 8px; flex-wrap: nowrap; }
+  .brand small { display: none; }
+  h1 { font-size: 17px; }
+  .wide-only { display: none; }
+  .narrow-only { display: inline; }
+  .sportswitch button { padding: 6px 11px; font-size: 13.5px; }
+  #themeToggle { padding: 6px 10px; }
+  /* The intro paragraph duplicates "How to read this", which is one tap away. */
+  section[data-panel="edge"] .card > .sub { display: none; }
+  .card { padding: 14px; border-radius: 12px; }
+  nav.tabs { overflow-x: auto; scrollbar-width: none; }
+  nav.tabs::-webkit-scrollbar { display: none; }
+  nav.tabs button { padding: 9px 10px; font-size: 14px; white-space: nowrap; }
+  nav.tabs { justify-content: space-between; }
+  .grid.two { grid-template-columns: 1fr; }
+
+  /* Three short lines per side. Five columns cannot fit in 360px without
+     truncating the team name, which is the one thing that must stay readable.
+     The verdict rides up beside the name so the answer is on the first line. */
+  .sideRow {
+    grid-template-columns: minmax(0, 1fr) auto 76px;
+    grid-template-areas:
+      "name   name    verdict"
+      "pct    fair    input"
+      "detail detail  detail";
+    gap: 6px 9px; padding: 11px 14px;
+  }
+  .sideRow + .sideRow { border-top: 1px solid var(--border); }
+  .sidename { font-size: 14px; }
+  .sidefair { text-align: right; align-self: center; }
+  .verdict { font-size: 15px; }
+  input.oddsinput { font-size: 16px; padding: 7px; }  /* 16px stops mobile zoom */
+  /* One horizontal strip, not a four-line stack. */
+  .evdetail {
+    justify-content: flex-start; gap: 3px 12px; padding-top: 1px;
+    font-size: 11px; line-height: 1.35;
+  }
+
+  /* Controls two-up instead of one per row — four stacked selects pushed the
+     actual fixtures off the first screen entirely. */
+  .card > .row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end;
+  }
+  .card > .row > label.field { flex: initial; min-width: 0; }
+  .card > .row > button.action { grid-column: 1 / -1; }
+  label.field select, label.field input { max-width: 100%; width: 100%; }
+  .metricgrid { grid-template-columns: 1fr 1fr; }
+  .metric .value { font-size: 19px; }
+  ul.filelist .name { min-width: 0; }
+  .row { gap: 8px; }
+  label.field { flex: 1 1 130px; }
+}
+
+/* --- unfolded foldable / small tablet, roughly square ------------------ */
+@media (min-width: 621px) and (max-width: 1000px) {
+  main { max-width: 100%; padding: 16px; }
+  #edgeList { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  #edgeList > .card { margin-bottom: 0; }
+  .sideRow { grid-template-columns: minmax(0, 1fr) 76px 44px 64px 54px; gap: 8px 7px; }
+  .sidepct b { min-width: 38px; font-size: 12px; }
+}
+
+/* --- wide --- */
+@media (min-width: 1001px) {
+  #edgeList { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  #edgeList > .card { margin-bottom: 0; }
+}
+
+/* Tall and narrow, the folded-phone shape: keep the sticky header thin so the
+   list gets the screen. */
+@media (max-width: 620px) and (min-aspect-ratio: 1/2.2) {
+  header { position: static; }
+}
+
+/* Coarse pointers get bigger hit targets regardless of width. */
+@media (pointer: coarse) {
+  button.action, .btn { padding: 11px 18px; }
+  input, select { padding: 9px 11px; font-size: 16px; }
+  details.fixture > summary { padding: 16px; }
+}

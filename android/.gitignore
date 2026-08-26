@@ -1,0 +1,5 @@
+build/
+*.keystore
+# mlev.apk is deliberately committed — it is the deliverable, it is 64KB, and
+# building it otherwise means installing the Android SDK.
+*.idsig

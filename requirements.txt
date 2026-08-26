@@ -13,6 +13,7 @@ joblib>=1.3               # model persistence
 
 # --- local web app (the double-click launcher) ---
 flask>=3.0                # serves the local UI on 127.0.0.1
+qrcode>=7.4               # scannable code for connecting a phone (optional)
 
 # --- dev ---
 pytest>=7.4               # test suite (leakage guards, model sanity)

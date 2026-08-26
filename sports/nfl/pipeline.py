@@ -11,6 +11,13 @@ from core.backtest import MarketModel, TabularBundle
 from core.config import SportConfig
 from core.features import assert_no_lookahead
 from core.io import write_table
+from core.markets import (
+    FixtureMarkets,
+    MarketSide,
+    complement,
+    format_line,
+    parse_line_key,
+)
 from core.pipeline import SportPipeline
 from sports.nfl import clean as nfl_clean
 from sports.nfl import features as nfl_features
@@ -137,3 +144,86 @@ class NFLPipeline(SportPipeline):
         out[numeric] = out[numeric].round(4)
         sort_key = [c for c in ("kickoff", "game_id") if c in out.columns]
         return out.sort_values(sort_key) if sort_key else out
+
+    def fixture_markets(self, scored: pd.DataFrame) -> list[FixtureMarkets]:
+        """Every NFL game market, both sides, from a `JointGameModel` output.
+
+        Because all three markets come off the same fitted margin and total
+        distributions, the moneyline, every spread and every total here are
+        mutually consistent — the away side is genuinely one minus the home
+        side and the push, not a separately fitted number.
+        """
+        out: list[FixtureMarkets] = []
+        for _, row in scored.iterrows():
+            home, away = row.get("home_team"), row.get("away_team")
+            sides: list[MarketSide] = []
+
+            # --- moneyline ---
+            if pd.notna(row.get("home_win_prob")):
+                tie = float(row.get("tie_prob") or 0.0)
+                home_p = float(row["home_win_prob"]) * (1.0 - tie)
+                sides.append(MarketSide("Moneyline", "Moneyline", home, home_p, tie))
+                sides.append(
+                    MarketSide("Moneyline", "Moneyline", away, complement(home_p, tie), tie)
+                )
+
+            # --- spreads ---
+            for column in scored.columns:
+                if not column.startswith("home_cover_"):
+                    continue
+                key = column[len("home_cover_"):]
+                cover = row.get(column)
+                if pd.isna(cover):
+                    continue
+                push = float(row.get(f"home_push_{key}") or 0.0)
+                line = parse_line_key(key)
+                label = f"Spread {format_line(line)}"
+                sides.append(
+                    MarketSide("Spread", label, f"{home} {format_line(line)}",
+                               float(cover), push)
+                )
+                sides.append(
+                    MarketSide("Spread", label, f"{away} {format_line(-line)}",
+                               complement(float(cover), push), push)
+                )
+
+            # --- totals ---
+            for column in scored.columns:
+                if not column.startswith("total_over_"):
+                    continue
+                key = column[len("total_over_"):]
+                over = row.get(column)
+                if pd.isna(over):
+                    continue
+                push = float(row.get(f"total_push_{key}") or 0.0)
+                line = parse_line_key(key)
+                label = f"Total {format_line(line)}"
+                sides.append(MarketSide("Total", label, f"Over {format_line(line)}",
+                                        float(over), push))
+                sides.append(MarketSide("Total", label, f"Under {format_line(line)}",
+                                        complement(float(over), push), push))
+
+            context = {
+                "Projected score": (
+                    f"{home} {row['exp_home_score']:.1f} — {away} {row['exp_away_score']:.1f}"
+                    if pd.notna(row.get("exp_home_score")) else ""
+                ),
+                "Margin": (
+                    f"{row['home_margin_mean']:+.1f} ± {row['home_margin_sd']:.1f}"
+                    if pd.notna(row.get("home_margin_mean")) else ""
+                ),
+                "Total": (
+                    f"{row['total_points_mean']:.1f} ± {row['total_points_sd']:.1f}"
+                    if pd.notna(row.get("total_points_mean")) else ""
+                ),
+            }
+            out.append(
+                FixtureMarkets(
+                    fixture_id=str(row.get("game_id", "")),
+                    label=f"{away} @ {home}",
+                    kickoff=str(row.get("kickoff", ""))[:10],
+                    sides=sides,
+                    context={k: v for k, v in context.items() if v},
+                )
+            )
+        return out

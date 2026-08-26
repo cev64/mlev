@@ -52,7 +52,7 @@ Premier League data from nflverse, football-data.co.uk and Understat.
 
 ---
 
-## 3. Use it — three tabs, in order
+## 3. Use it — four tabs, in order
 
 ### Tab 1 · Data
 
@@ -103,6 +103,93 @@ by design.
 
 Predictions are also written to `data/<sport>/predictions/` as CSV, so you can
 open them in Excel or Numbers.
+
+### Tab 4 · Edge
+
+Both sides of every market as a percentage, with the fair price the model
+implies. Type a book's price next to any side and you get the edge, the expected
+value, and the Kelly stake.
+
+Four numbers appear once you enter a price:
+
+| | What it means |
+|---|---|
+| **Model %** | the chance the model gives that side. Where a push is possible this is the chance it wins *outright*, with the push listed separately |
+| **Fair** | the price a book taking zero margin would post. Any real price is worse; the question is by how much |
+| **Edge** | model minus the price you typed, after removing the push |
+| **EV** | expected profit on your stake — the number that actually decides whether a price is worth taking |
+
+Type **both** sides of a market and you also get a **no-vig** number. That is
+the honest one: a book's two prices sum to more than 100%, and the excess is its
+margin. Comparing against the raw implied number means comparing against a
+figure that already has the house edge baked in.
+
+Two things worth knowing:
+
+- **A push is not a loss.** An NFL −3 spread lands on exactly 3 about 15% of the
+  time and returns your stake. Treating those as losses would misprice the bet by
+  roughly three to one — the app handles it, but it is why the "Model %" and the
+  book's implied number are not directly comparable without the adjustment.
+- **Kelly is an upper bound**, not a recommendation. It assumes the model's
+  probability is exactly right, which it never is.
+
+Prices you type are saved in the browser, so a half-finished session survives a
+reload or the phone locking.
+
+---
+
+## Using it on your phone
+
+The models need Python, pandas and about 100 MB of data, so they cannot run on a
+phone. The phone is a client; your Mac does the work. Both need to be on the same
+Wi-Fi.
+
+### Start the Mac with phone access
+
+Double-click **`Start mlev (phone).command`** instead of the usual one. It prints
+an address and a QR code:
+
+```
+  On your phone, on the same Wi-Fi, open:
+      http://192.168.1.42:8733
+```
+
+While it is running, anyone on your network can reach it. Use the plain
+`Start mlev.command` when you only want it on the Mac.
+
+### Install the Android app
+
+`android/mlev.apk` in the repo is a ready-to-install app. Copy it to your phone
+(AirDrop-equivalent, USB, Google Drive, or email it to yourself) and tap it.
+
+Android will warn you about installing from an unknown source — that is expected
+for any app not from the Play Store. Allow it for whichever app you are
+installing from, then tap the file again.
+
+On first launch it asks for your Mac's address. Type what the Terminal printed —
+`192.168.1.42:8733`, or just `192.168.1.42` and it fills in the port. It
+remembers it. **Long-press volume-down** to change it later, which you will need
+if your Mac's address changes after rejoining the network.
+
+### Why an app and not just a bookmark
+
+A web app can normally be installed to the home screen and run full screen. That
+needs a secure context — HTTPS — and your Mac serves plain HTTP on your Wi-Fi. So
+"Add to Home Screen" would give you a browser tab with a nice icon, not a real
+app. The APK has no such restriction: real icon, full screen, no browser chrome.
+
+### When your Mac is asleep
+
+The app keeps the last numbers you loaded and shows them with a note saying how
+old they are. The EV calculator keeps working offline too — it does the same
+arithmetic in the browser. What you cannot do offline is generate *new*
+predictions, because that needs the models.
+
+### On a foldable
+
+The layout is built for it. Folded, each market side is three short lines and
+nothing is truncated. Unfolded, fixtures go two columns. It reflows when you open
+or close the phone, no restart needed.
 
 ---
 
@@ -194,6 +281,16 @@ python run_backfill.py --sport epl --with-players
 python run_backtest.py  --sport epl --level game
 python run_scoring.py   --sport epl --fixtures my_fixtures.csv
 
-python -m pytest tests/ -q          # 63 tests
+python -m pytest tests/ -q          # 101 tests
 python -m app.launch                # the web app, without the launcher
+python -m app.launch --lan          # ...also reachable from your phone
+```
+
+Rebuilding the Android app (needs the Android SDK, which the repo does not
+include — `android/mlev.apk` is prebuilt, so you only need this if you change the
+app):
+
+```bash
+ANDROID_HOME=~/Library/Android/sdk ./android/build-apk.sh
+./android/run-tests.sh
 ```
