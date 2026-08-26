@@ -21,6 +21,8 @@ data class BundleDto(
     val kind: String = "",
     val backtest: Map<String, Map<String, Double>> = emptyMap(),
     val lattice: LatticePairDto? = null,
+    /** How far the exported numbers were moved toward the posted line. */
+    val blend: BlendDto? = null,
     @SerialName("grid_max_goals") val gridMaxGoals: Int = 0,
     val model: Map<String, Double> = emptyMap(),
     val fixtures: List<FixtureDto> = emptyList(),
@@ -49,6 +51,8 @@ data class FixtureDto(
     // NFL
     val margin: MomentsDto? = null,
     val total: MomentsDto? = null,
+    /** What the book had posted when this was exported, where it had. */
+    val market: MarketDto? = null,
     // EPL
     val grid: List<List<Double>>? = null,
     @SerialName("replacement_rating") val replacementRating: Boolean = false,
@@ -56,6 +60,28 @@ data class FixtureDto(
 
 @Serializable
 data class MomentsDto(val mean: Double, val sd: Double)
+
+/**
+ * The weight the pipeline put on the model rather than the market.
+ *
+ * 0.15 means the exported distribution is 15% this model's own opinion and 85%
+ * the posted line. The weight is fitted on training seasons only; it is carried
+ * here so the app can say how much of a number is the model's, rather than
+ * implying all of it is.
+ */
+@Serializable
+data class BlendDto(
+    val margin: Double? = null,
+    val total: Double? = null,
+)
+
+@Serializable
+data class MarketDto(
+    val spread: Double? = null,
+    val total: Double? = null,
+    @SerialName("home_price") val homePrice: Double? = null,
+    @SerialName("away_price") val awayPrice: Double? = null,
+)
 
 @Serializable
 data class IndexDto(

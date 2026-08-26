@@ -78,6 +78,15 @@ data class BundleInfo(
     val fixtureCount: Int,
     /** Out-of-sample metrics per target, so the app can show the evidence. */
     val backtest: Map<String, Map<String, Double>> = emptyMap(),
+    /**
+     * How much of these numbers is the model's own opinion, 0 to 1.
+     *
+     * The rest is the posted line. Carried so the app can say it out loud: a
+     * prediction that is mostly the market repeated back is a useful
+     * prediction, but calling it the model's would be a claim it has not
+     * earned.
+     */
+    val modelWeight: Double? = null,
 )
 
 /** A price the user typed against a side. */

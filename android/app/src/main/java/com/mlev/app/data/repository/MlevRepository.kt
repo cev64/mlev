@@ -143,6 +143,14 @@ class MlevRepository(
                             f.away, (total.mean - margin.mean) / 2))
                         put("Margin", "%+.1f ± %.1f".format(margin.mean, margin.sd))
                         put("Total", "%.1f ± %.1f".format(total.mean, total.sd))
+                        // The book's own numbers, beside the model's. Seeing
+                        // the two together is the whole story on a fixture:
+                        // where they agree there is nothing to bet, and where
+                        // they diverge is where the model is making a claim.
+                        f.market?.spread?.let {
+                            put("Line", "%s %+.1f".format(f.home, it))
+                        }
+                        f.market?.total?.let { put("Line total", "%.1f".format(it)) }
                     },
                 ),
                 markets = MarketBuilder.nflMarkets(f.home, f.away, marginDist, totalDist)
@@ -198,6 +206,7 @@ class MlevRepository(
             trainingRows = trainingRows,
             fixtureCount = fixtureCount,
             backtest = dto?.backtest ?: emptyMap(),
+            modelWeight = dto?.blend?.margin,
         )
     }
 

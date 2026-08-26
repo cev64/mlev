@@ -37,10 +37,13 @@ fun AboutScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         NoteCard(
-            "These are one model's opinions, not advice. Check the out-of-sample " +
-                "record below before acting on any market: the model beats the base " +
-                "rate on NFL moneylines and Premier League match results, and does " +
-                "not beat it on Premier League totals or both-teams-to-score.",
+            "These are one model's opinions, not advice.\n\n" +
+                "What the record below does and does not say: this model beats " +
+                "the base rate in every season tested, and now matches the " +
+                "closing line. It does not beat the closing line by enough to " +
+                "overcome the book's margin — flat-staked, following its own " +
+                "+EV picks has lost money out of sample. Treat a big edge as a " +
+                "reason to look again, not a reason to bet.",
             NoteTone.CAUTION,
         )
 
@@ -59,7 +62,11 @@ fun AboutScreen(
                         "That is the honest comparison — a book's two prices sum to " +
                         "more than 100%, and the excess is its margin.\n\n" +
                         "Kelly is an upper bound on what a bankroll can justify if the " +
-                        "model's probability is exactly right. It never is.",
+                        "model's probability is exactly right. It never is.\n\n" +
+                        "Where a fixture shows a Line, that is what the book had " +
+                        "posted when these predictions were built. The model's " +
+                        "number is already pulled most of the way toward it, so a " +
+                        "remaining gap is the part the model is actually claiming.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -76,6 +83,18 @@ fun AboutScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    bundle.modelWeight?.let { weight ->
+                        Text(
+                            "These predictions are %.0f%% this model and %.0f%% the ".format(
+                                weight * 100, (1 - weight) * 100,
+                            ) + "posted line. The weight is fitted on past seasons " +
+                                "only — the model gets as much say as it has earned " +
+                                "against the market, and no more.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
                     bundle.backtest.forEach { (target, metrics) ->
                         Column(Modifier.padding(top = 6.dp)) {
                             Text(prettyTarget(target), style = MaterialTheme.typography.bodyMedium)
@@ -90,6 +109,34 @@ fun AboutScreen(
                             metrics["mae"]?.let { StatLine("Average error", "%.2f".format(it)) }
                             metrics["accuracy"]?.let { StatLine("Accuracy", "%.1f%%".format(it * 100)) }
                             metrics["ece"]?.let { StatLine("Calibration error", "%.4f".format(it)) }
+                            // The market rows. A model that beats the base rate
+                            // and loses to the line is the normal case, and the
+                            // screen has to be able to say so.
+                            metrics["market_mae"]?.let { market ->
+                                val model = metrics["model_mae"]
+                                if (model != null) {
+                                    StatLine(
+                                        "Against the line",
+                                        "%.2f model vs %.2f line — %s".format(
+                                            model, market,
+                                            if (model < market) "model closer" else "line closer",
+                                        ),
+                                    )
+                                }
+                            }
+                            metrics["roi"]?.let { roi ->
+                                val low = metrics["roi_low"]
+                                val high = metrics["roi_high"]
+                                StatLine(
+                                    "Flat-stake return",
+                                    if (low != null && high != null) {
+                                        "%+.1f%% (95%%: %+.1f%% to %+.1f%%)".format(
+                                            roi * 100, low * 100, high * 100,
+                                        )
+                                    } else "%+.1f%%".format(roi * 100),
+                                )
+                            }
+                            metrics["hit_rate"]?.let { StatLine("Hit rate", "%.1f%%".format(it * 100)) }
                             metrics["n"]?.let { StatLine("Sample", "%,d rows".format(it.toInt())) }
                         }
                     }
@@ -112,6 +159,11 @@ fun AboutScreen(
 }
 
 private fun prettyTarget(target: String): String = when {
+    target == "margin vs line" -> "Winning margin, against the closing line"
+    target == "total vs line" -> "Total points, against the closing line"
+    target == "moneyline +EV" -> "Backing every +EV moneyline"
+    target == "moneyline EV>10%" -> "Backing only edges over 10%"
+    target == "moneyline every side" -> "Backing every side (the house edge)"
     target == "home_win" -> "Home win probability"
     target == "home_margin" -> "Winning margin"
     target == "total_points" -> "Total points"
