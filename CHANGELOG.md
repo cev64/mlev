@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — fix: the text boxes
+
+### Fixed
+- **A typed price could not be trusted to stay typed.** Every price field was
+  driven directly from the saved value in Room, which arrives back at least one
+  suspending hop after the keystroke that caused it. Characters typed at any
+  speed raced that write, so they were dropped or reordered and the cursor
+  jumped to the end of whatever text arrived. Each field now owns its text
+  while it is being edited and adopts the stored value only when it changes for
+  some other reason — cleared from Settings, or a different fixture opened.
+- **American odds could not be entered at all.** The price field asked for
+  `KeyboardType.Number`, which is `TYPE_CLASS_NUMBER` with no sign flag: the
+  keyboard it produces has no minus key, and almost every American price is
+  negative. American odds now get the phone keypad, which has one; decimal odds
+  keep the decimal pad, since decimal prices are never negative.
+- **The row being typed into could vanish under a filter.** "Priced" and "+EV"
+  re-evaluate on every keystroke, so clearing a box to retype it, or typing a
+  price that was not yet positive, deleted the row the cursor was in and took
+  the keyboard with it. The row being edited now stays until focus leaves it.
+- **The stake box erased decimals as they were typed.** It was re-keyed on the
+  saved stake and rendered through `toInt()`, so "12.50" became "12" the moment
+  DataStore answered. It also pushed every keystroke through a setter that
+  floors at 1, so an empty box saved a stake of 1. It now saves only a usable
+  number and marks anything else as an error.
+- **"Save and refresh" fetched from the previous address.** Saving and
+  refreshing were launched as two independent coroutines; the refresh usually
+  won and read the address DataStore had not yet been updated with. It is one
+  action now, in that order.
+- **A refresh with no screen attached used the default address.** `refresh()`
+  read the URL from a `WhileSubscribed` state flow, whose value with no
+  collector is still `Settings()` — so the refresh on launch downloaded from
+  the default address rather than the user's. It reads from storage now.
+- Done on the keyboard closes the keyboard, and the address field no longer
+  offers autocorrect or a capital first letter.
+
+### Added
+- `TextEntryTest` — types into the fields rather than only rendering them,
+  including a store that never answers, which is what the render tests could
+  never catch.
+
 ## 2.0.1 — fix: the app crashed on every launch
 
 ### Fixed
