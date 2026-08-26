@@ -1,11 +1,17 @@
 # --- existing scaffold ---
-nfl_data_py>=0.3.2        # nflverse: schedules, play-by-play, weekly player stats
+# Pinned deliberately. nfl_data_py 0.3.3 requires pandas<2 and numpy<2, so
+# asking for pandas>=2 below it is a contradiction: pip resolves it by silently
+# downgrading pandas locally, or by backtracking to an older nfl_data_py in CI.
+# The older one indexes a DataFrame with a set, which pandas removed — the
+# publish workflow died on exactly that. Everything here is tested against this
+# combination.
+nfl_data_py>=0.3.3,<0.4   # nflverse: schedules, play-by-play, snaps, injuries
 requests>=2.31            # The Odds API client in fetch_odds_data.py
 python-dotenv>=1.0        # .env loading for API keys
 
 # --- added for the modelling pipeline ---
-pandas>=2.0               # dataframes throughout
-numpy>=1.24               # numerics
+pandas>=1.5,<2.0          # upper bound comes from nfl_data_py, see above
+numpy>=1.24,<2.0          # same
 scipy>=1.10               # Dixon-Coles MLE (optimize), Poisson/Normal distributions
 scikit-learn>=1.3         # logistic regression, ridge, gradient boosting, calibration
 pyarrow>=14.0             # parquet IO for the clean/feature layers

@@ -119,13 +119,33 @@ def fetch_injuries(seasons: list[int]) -> pd.DataFrame:
     return _import(nfl.import_injuries, "injury reports", seasons)
 
 
-def fetch_player_ids() -> pd.DataFrame:
-    import nfl_data_py as nfl
+# The crosswalk nfl_data_py's import_ids reads. Going straight to it skips a
+# code path that has shipped a version indexing a DataFrame with a set, which
+# pandas removed — a call that works on one pandas and raises TypeError on
+# another. One read_csv is not worth that exposure.
+PLAYER_IDS_URL = (
+    "https://raw.githubusercontent.com/dynastyprocess/data/master/files/db_playerids.csv"
+)
 
-    ids = _import(
-        nfl.import_ids, "player id crosswalk", columns=["gsis_id", "pfr_id", "name", "position"]
-    )
-    return ids.dropna(subset=["gsis_id", "pfr_id"]).drop_duplicates("pfr_id")
+
+def fetch_player_ids() -> pd.DataFrame:
+    """The gsis_id <-> pfr_id crosswalk, used to attach snap counts."""
+    try:
+        ids = pd.read_csv(PLAYER_IDS_URL, low_memory=False)
+    except Exception as exc:
+        raise DataSourceError(
+            f"player id crosswalk unavailable at {PLAYER_IDS_URL}: "
+            f"{type(exc).__name__}: {exc}. Snap counts cannot be joined without it."
+        ) from exc
+
+    missing = {"gsis_id", "pfr_id"} - set(ids.columns)
+    if missing:
+        raise DataSourceError(
+            f"player id crosswalk is missing {sorted(missing)}; its schema has changed."
+        )
+
+    keep = [c for c in ("gsis_id", "pfr_id", "name", "position") if c in ids.columns]
+    return ids[keep].dropna(subset=["gsis_id", "pfr_id"]).drop_duplicates("pfr_id")
 
 
 def fetch_team_week_epa(seasons: list[int]) -> pd.DataFrame:
